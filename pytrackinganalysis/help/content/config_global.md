@@ -4,7 +4,7 @@ The **Global** tab edits the `global:` section of one replicate's `tracking_conf
 
 ## Experiment type
 
-An **Experiment Type** is a named assay bundle. For example, **Valence Experiment** fixes the tracking type to two-choice tracking, constrains the rig to Arena Max or Colosseum, requires Light and NoLight counting regions, supplies default phases, and adds Valence-specific quality criteria.
+An **Experiment Type** is a named assay bundle. For example, **Valence Experiment** fixes the tracking type to two-choice tracking, constrains the rig to Arena Max, Colosseum, or Small Arena, requires Light and NoLight counting regions, supplies default phases, and adds Valence-specific quality criteria.
 
 Choose **Custom** when you want the older freeform behavior driven directly by `tracking_type`.
 

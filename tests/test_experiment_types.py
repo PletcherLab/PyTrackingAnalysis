@@ -14,7 +14,10 @@ def _valence_config(rig="arena_max", **global_overrides):
     g.update(global_overrides)
     # Lay out the plate the rig actually has, so a well-formed config validates.
     # Unconstrained/invalid rigs (region check skipped) get a single stub region.
-    n = {"arena_max": 36, "colosseum": 24}.get(rig, 1)
+    from pytrackinganalysis import config_validation as _cv
+
+    n = {"arena_max": 36, "colosseum": 24,
+         "small_arena": 6}.get(_cv.normalize_rig(rig), 1)
     return {
         "global": g,
         "counting_regions": {
@@ -116,9 +119,39 @@ def test_valence_accepts_a_well_formed_config():
     assert t.validate(_valence_config(rig="colosseum")) == []
 
 
+def test_valence_accepts_small_arena():
+    t = et.get_experiment_type("Valence")
+    assert t.validate(_valence_config(rig="small_arena")) == []
+    assert t.validate(_valence_config(rig="smallarena")) == []   # spelling alias
+
+
+def test_valence_small_arena_is_six_wells_with_no_flips():
+    """One Small Arena unit per recording: exactly T_0..T_5, and no mirrored
+    wells — every X multiplier is +1 (the Arena Max flip never applies)."""
+    t = et.get_experiment_type("Valence")
+    assert t.region_counts_for_rig("small_arena") == (6,)
+    assert t.regions_for_rig("small_arena") == [f"T_{i}" for i in range(6)]
+    cfg = t.build_config(rig="small_arena")
+    regions = cfg["tracking_regions"]
+    assert list(regions) == [f"T_{i}" for i in range(6)]
+    assert all(r["x_location_multiplier"] == 1 for r in regions.values())
+    assert list(cfg["counting_regions"]) == ["Light", "NoLight"]
+    ## Calibration comes from the preset (0.056 mm/px, MSec timing): the
+    ## config must not carry its own fps / mm_per_pixel.
+    assert "fps" not in cfg["global"]
+    assert "mm_per_pixel" not in cfg["global"]
+    assert t.validate(cfg) == []
+    ## The wrong plate size is refused, exactly as for the fixed rigs.
+    cfg["tracking_regions"] = {f"T_{i}": {"experimental_factors": "",
+                                          "x_location_multiplier": 1,
+                                          "y_location_multiplier": 1}
+                               for i in range(8)}
+    assert any("6 tracking regions" in p for p in t.validate(cfg))
+
+
 def test_valence_rejects_wrong_rig():
     t = et.get_experiment_type("Valence")
-    problems = t.validate(_valence_config(rig="small_arena"))
+    problems = t.validate(_valence_config(rig="obscura"))
     assert any("tracking_rig" in p for p in problems)
 
 
@@ -361,7 +394,7 @@ def test_validate_config_consults_the_type():
     from pytrackinganalysis import config_validation
     assert config_validation.validate_config(_valence_config()) == []
     assert config_validation.validate_config(_valence_config(rig="colosseum")) == []
-    bad = config_validation.validate_config(_valence_config(rig="small_arena"))
+    bad = config_validation.validate_config(_valence_config(rig="obscura"))
     assert any("tracking_rig" in p for p in bad)
 
 
@@ -396,7 +429,7 @@ def _exp_stub(config, exp_type_name):
 
 
 def test_typed_experiment_fails_hard_on_bad_config():
-    exp = _exp_stub(_valence_config(rig="small_arena"), "Valence")
+    exp = _exp_stub(_valence_config(rig="obscura"), "Valence")
     with pytest.raises(ValueError, match="Valence Experiment configuration"):
         exp._validate_config()
 

@@ -211,8 +211,20 @@ _Avoid_: assay type
 
 **Valence Experiment**:
 The first Experiment Type. A two-choice light-preference assay: a two-choice
-tracker, Light vs NoLight counting regions (in that order), on a Max or Colosseum
-arena (preset calibration only), with the fixed three-phase structure below.
+tracker, Light vs NoLight counting regions (in that order), on a Max, Colosseum,
+or Small Arena rig (preset calibration only), with the fixed three-phase
+structure below.
+
+**Small Arena**:
+A 6-well tracking rig (`tracking_rig: small_arena`; regions `T_0..T_5`, no
+mirrored wells, preset 0.056 mm/px, frame timing from the DTrack MSec column
+like every rig — there is no fps). Four interchangeable physical units exist
+in the lab (Red1/Red2/Green1/Green2); the config never names the unit, only
+the rig, because all four share one configuration. Valence-eligible with the
+standard defaults (Light/NoLight aliases, 10/70 phases, min_transitions 5,
+min_movement 140).
+_Avoid_: SmallArenas (plural, as a rig name), chamber type (say rig), naming
+Red1/Green1 etc. in configs
 
 **Counting Region**:
 A named group of raw DTrack region labels (its aliases) that an animal can

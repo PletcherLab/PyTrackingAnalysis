@@ -159,7 +159,7 @@ def test_selecting_valence_locks_owned_fields_and_constrains_rig(qapp):
     assert not tab.tracking_type.isEnabled()
     # Rig constrained to Max/Colosseum.
     rigs = {tab.tracking_rig.itemData(i) for i in range(tab.tracking_rig.count())}
-    assert rigs == {"arena_max", "colosseum"}
+    assert rigs == {"arena_max", "colosseum", "small_arena"}
     # Facets default-filled but EDITABLE (a default, not owned); calibration disabled.
     assert tab.facet_cutoffs.text().replace(" ", "") == "10,70"
     assert tab.facet_cutoffs.isEnabled()

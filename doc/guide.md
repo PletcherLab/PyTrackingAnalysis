@@ -380,12 +380,12 @@ owns are supplied for you — you do **not** write them in the file.
 ```yaml
 global:
   experiment_type: Valence     # fixes tracking_type + phases; constrains the rig
-  tracking_rig:    colosseum   # you choose: arena_max or colosseum
+  tracking_rig:    colosseum   # you choose: arena_max, colosseum, or small_arena
 ```
 
 | Value | What it fixes |
 |-------|---------------|
-| `Valence` | Two-choice light-preference assay. Tracking type `TWOCHOICETRACKER`; **Light/NoLight** counting regions (in that order, so positive PI = light-preference); phases **Acclimation (0–10) / Experiment (10–70) / Cooldown (70+)**; rig must be `arena_max` (36 regions, `T_0`–`T_35`) or `colosseum` (24 regions, `T_0`–`T_23`); calibration from the rig preset only. |
+| `Valence` | Two-choice light-preference assay. Tracking type `TWOCHOICETRACKER`; **Light/NoLight** counting regions (in that order, so positive PI = light-preference); phases **Acclimation (0–10) / Experiment (10–70) / Cooldown (70+)**; rig must be `arena_max` (36 regions, `T_0`–`T_35`), `colosseum` (24 regions, `T_0`–`T_23`), or `small_arena` (6 regions, `T_0`–`T_5`, one 6-well unit per recording); calibration from the rig preset only. |
 
 For a type whose plate is fixed by the rig (like Valence), the Config Editor
 lays out the exact tracking regions when you choose the rig — 36 rows for Arena

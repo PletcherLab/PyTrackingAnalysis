@@ -1,9 +1,9 @@
 """The Valence Experiment Type — the first concrete type.
 
 A two-choice light-preference assay: a two-choice tracker with Light vs NoLight
-counting regions on a Max or Colosseum arena, with a fixed three-phase structure
-(acclimation / experiment / cooldown from cutoffs [10, 70]). See ``CONTEXT.md``
-and ADR-0001.
+counting regions on an Arena Max, Colosseum, or Small Arena rig, with a fixed
+three-phase structure (acclimation / experiment / cooldown from cutoffs
+[10, 70]). See ``CONTEXT.md`` and ADR-0001.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ class ValenceExperimentType(ExperimentType):
     display_name = "Valence Experiment"
 
     tracking_type = Parameters.TrackingType.TWOCHOICETRACKER
-    allowed_rigs = ("arena_max", "colosseum")
+    allowed_rigs = ("arena_max", "colosseum", "small_arena")
     facet_cutoffs = (10, 70)   # a default; the user may change it (facets_fixed=False)
     facets_fixed = False
     phase_labels = ("Acclimation", "Experiment", "Cooldown")
@@ -38,8 +38,11 @@ class ValenceExperimentType(ExperimentType):
     # The plate is fixed by the rig: Arena Max has 36 wells (T_0..T_35).
     # The Colosseum is run at two sizes — 24 wells (T_0..T_23) and 18
     # (T_0..T_17) — and both validate; 24 is first, so it is the plate a
-    # config built from scratch is laid out with.
-    region_counts = {"arena_max": 36, "colosseum": (24, 18)}
+    # config built from scratch is laid out with. The Small Arena is one
+    # 6-well unit per recording (T_0..T_5); the lab's four physical units
+    # share this one configuration and are never named in a config.
+    region_counts = {"arena_max": 36, "colosseum": (24, 18),
+                     "small_arena": 6}
     # Low-Transition Exclusion (ADR-0003): flies with fewer than this many
     # transitions during the Primary Phase are excluded from every result.
     # yaml `min_transitions` overrides; 0 turns the exclusion off.
@@ -54,7 +57,8 @@ class ValenceExperimentType(ExperimentType):
     def tracking_regions_for_rig(self, rig) -> dict | None:
         """The Valence plate: on Arena Max the first 18 wells (T_0..T_17) face
         the opposite way, so their X axis is flipped to -1 and the remaining
-        18 are +1; the Colosseum is all +1 at either of its sizes."""
+        18 are +1; the Colosseum (either size) and the Small Arena have no
+        mirrored wells, so they are all +1."""
         names = self.regions_for_rig(rig)
         if names is None:
             return None
@@ -228,8 +232,9 @@ class ValenceExperimentType(ExperimentType):
         return []
 
     def scaffold_config(self) -> dict:
-        # Rig is intentionally left blank: the user must choose Max or Colosseum,
-        # so a freshly scaffolded project fails validation until they do.
+        # Rig is intentionally left blank: the user must choose one of the
+        # allowed rigs, so a freshly scaffolded project fails validation
+        # until they do.
         return {
             "global": {
                 "experiment_type": self.name,
@@ -250,10 +255,10 @@ class ValenceExperimentType(ExperimentType):
         """Full Valence config for the create wizard.
 
         Lays out the rig's DEFAULT plate with the correct X multipliers (Arena
-        Max flips the first 18 wells; Colosseum is all +1, 24 wells — an
+        Max flips the first 18 wells; the Colosseum — all +1, 24 wells; an
         18-well Colosseum is equally valid but has to be chosen in the Config
-        Editor), the Light/NoLight counting regions, the chosen (or default)
-        facets with their phase names
+        Editor — and the 6-well Small Arena have no flips), the Light/NoLight
+        counting regions, the chosen (or default) facets with their phase names
         (Acclimation/Experiment/Cooldown by default), and any design factors.
         Region treatments are left blank for the user to assign.
         """
