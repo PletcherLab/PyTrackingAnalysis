@@ -125,6 +125,30 @@ def test_deleting_a_tracker_also_drops_the_cache(tracker_project):
     assert len(exp.arena.summarize()) == 1
 
 
+def test_qc_survives_a_wholly_excluded_population(tracker_project, capsys):
+    """Every tracker excluded leaves the faceted summary empty.
+
+    That used to reach seaborn as a grid with zero columns and abort the whole
+    Load + QC with matplotlib's "Number of rows must be a positive integer, not
+    0". QC exists to show the problem, so it reports and carries on.
+    """
+    exp = ExperimentMod.Experiment(str(tracker_project))
+    exp.arena.set_excluded_trackers(exp.arena.summarize(include_excluded=True)["Name"])
+    exp.run_qc()
+    out = capsys.readouterr().out
+    assert "Skipping QC facet plot for TotalDistancePerMin" in out
+    assert "2 of 2 tracker(s) are excluded" in out
+
+
+def test_facet_plot_on_an_empty_summary_raises_a_named_error(tracker_project):
+    from pytrackinganalysis import Arena
+
+    exp = ExperimentMod.Experiment(str(tracker_project))
+    exp.arena.set_excluded_trackers(exp.arena.summarize(include_excluded=True)["Name"])
+    with pytest.raises(Arena.NoFacetData, match="Nothing to plot"):
+        exp.arena.plot_totaldistance_facet_generaltracker(cutoffs=[2, 4])
+
+
 def test_movie_rig_without_calibration_is_rejected(tmp_path):
     project = write_project(tmp_path / "movie", rig="movie")
     with pytest.raises(ValueError, match="requires explicit calibration"):

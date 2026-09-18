@@ -5,6 +5,7 @@ import matplotlib.patches as patches
 from matplotlib.animation import FuncAnimation
 import time
 
+from . import clock_repair
 from . import windowing
 
 class Counter:
@@ -53,6 +54,11 @@ class Counter:
                 f"Invalid fps {self.parameters.fps} for counter {self.name}. "
                 "Use -1 (wall-clock timestamps), 0 (DTrack MSec column), or a positive frame rate."
             )
+        ## Same guard as Tracker: a clock set back mid-run must be repaired on
+        ## disk, not analysed. Several blobs share a frame here, so consecutive
+        ## rows repeat a stamp; only a genuine backward step trips the check.
+        clock_repair.raise_if_rolled_back(
+            self.name, self.rawdata['Frame'], self.rawdata['Minutes'] * 60_000)
         return
     
     def get_plot_limits(self):

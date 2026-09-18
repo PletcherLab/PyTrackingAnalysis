@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.animation import FuncAnimation
 
+from . import clock_repair
 from . import windowing
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,13 @@ class Tracker:
                 f"Invalid fps {self.parameters.fps} for tracker {self.name}. "
                 "Use -1 (wall-clock timestamps), 0 (DTrack MSec column), or a positive frame rate."
             )
+        ## A recording clock set back mid-run (an hourly time sync undoing a
+        ## time-zone mismatch, in NOMPc/F-max1) sends Minutes backwards while
+        ## Frame carries on. Refuse it here, where the message can still name
+        ## the cause and the fix, instead of letting it surface as an empty
+        ## phase, a wholesale exclusion and a matplotlib grid with zero rows.
+        clock_repair.raise_if_rolled_back(
+            self.name, self.rawdata['Frame'], self.rawdata['Minutes'] * 60_000)
         return
 
     def calculate_speeds_and_feeds(self):

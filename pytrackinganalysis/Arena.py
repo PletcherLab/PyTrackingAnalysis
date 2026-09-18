@@ -48,6 +48,10 @@ def _merge_adjacent_runs(rle_df, column='group'):
 ## nothing ever set. Two copies of the rig table would have drifted; see
 ## Experiment._build_parameters and config_validation.RIG_ALIASES.
 
+class NoFacetData(ValueError):
+    """A faceted plot was asked for but the faceted summary has no rows."""
+
+
 class Arena:
     """
     Class representing an experimental arena for tracking and analyzing data.
@@ -104,6 +108,23 @@ class Arena:
         out = df.copy()
         out['Treatment'] = out['Treatment'].map(_abbrev_treatment)
         return out
+
+    def _facet_grid(self, the_data, **kwargs):
+        """``sns.FacetGrid`` over ``FacetRange`` that fails legibly on an empty summary.
+
+        Zero facet columns reach matplotlib as ``GridSpec(0, ...)`` and surface
+        as "Number of rows must be a positive integer, not 0" — a message about
+        matplotlib internals when the real story is that nothing survived
+        ``summarize_facet``: every tracker excluded, or no rows inside any window.
+        """
+        if len(the_data) == 0:
+            excluded = getattr(self, 'excluded_names', None) or ()
+            raise NoFacetData(
+                "Nothing to plot: the faceted summary is empty. "
+                f"{len(excluded)} of {len(self.trackers)} tracker(s) are excluded and "
+                "the rest have no rows inside the facet windows. Check the exclusion "
+                "notes printed at load and the facet cutoffs.")
+        return sns.FacetGrid(the_data, col='FacetRange', col_wrap=3, height=4, **kwargs)
 
     def get_experiment_file_info(self):
         """
@@ -1004,7 +1025,7 @@ class Arena:
             plt.xlim(-.5,ntreatments-1+0.5)
 
         # Create the FacetGrid
-        g = sns.FacetGrid(the_data, col='FacetRange', col_wrap=3, height=4)
+        g = self._facet_grid(the_data)
         #g.map(sns.stripplot, 'Treatment', 'FinalPI', 'Transitions', jitter=True)
         g.map_dataframe(custom_plot)
         # Add titles and labels
@@ -1041,7 +1062,7 @@ class Arena:
             plt.xlim(-.5,ntreatments-1+0.5)
 
         # Create the FacetGrid
-        g = sns.FacetGrid(the_data, col='FacetRange', col_wrap=3, height=4)
+        g = self._facet_grid(the_data)
         #g.map(sns.stripplot, 'Treatment', 'FinalPI', 'Transitions', jitter=True)
         g.map_dataframe(custom_plot)
         # Add titles and labels
@@ -1078,7 +1099,7 @@ class Arena:
             plt.xlim(-.5,ntreatments-1+0.5)
             
         # Create the FacetGrid
-        g = sns.FacetGrid(the_data, col='FacetRange', col_wrap=3, height=4,sharey=False)
+        g = self._facet_grid(the_data, sharey=False)
         #g.map(sns.stripplot, 'Treatment', 'FinalPI', 'Transitions', jitter=True)
         g.map_dataframe(custom_plot)
         # Add titles and labels
@@ -1175,7 +1196,7 @@ class Arena:
             plt.xlim(-.5,ntreatments-1+0.5)
 
         # Create the FacetGrid
-        g = sns.FacetGrid(the_data, col='FacetRange', col_wrap=3, height=4)
+        g = self._facet_grid(the_data)
         #g.map(sns.stripplot, 'Treatment', 'FinalPI', 'Transitions', jitter=True)
         g.map_dataframe(custom_plot)
         # Add titles and labels
@@ -1270,7 +1291,7 @@ class Arena:
                 
         for dist_column in [f"PercentInteracting_{dist}" for dist in self.parameters.interaction_distance_mm]:
             # Create the FacetGrid
-            g = sns.FacetGrid(the_data, col='FacetRange', col_wrap=3, height=4)
+            g = self._facet_grid(the_data)
             #g.map(sns.stripplot, 'Treatment', 'FinalPI', 'Transitions', jitter=True)
             g.map_dataframe(custom_plot,colname=dist_column)
             # Add titles and labels
@@ -1310,7 +1331,7 @@ class Arena:
             plt.xlim(-.5,ntreatments-1+0.5)
 
         # Create the FacetGrid
-        g = sns.FacetGrid(the_data, col='FacetRange', col_wrap=3, height=4)
+        g = self._facet_grid(the_data)
         #g.map(sns.stripplot, 'Treatment', 'FinalPI', 'Transitions', jitter=True)
         g.map_dataframe(custom_plot)
         # Add titles and labels
@@ -1348,7 +1369,7 @@ class Arena:
             plt.xlim(-.5,ntreatments-1+0.5)
 
         # Create the FacetGrid
-        g = sns.FacetGrid(the_data, col='FacetRange', col_wrap=3, height=4)
+        g = self._facet_grid(the_data)
         #g.map(sns.stripplot, 'Treatment', 'FinalPI', 'Transitions', jitter=True)
         g.map_dataframe(custom_plot)
         # Add titles and labels
@@ -1413,7 +1434,7 @@ class Arena:
             plt.xlim(-.5,ntreatments-1+0.5)
 
         # Create the FacetGrid
-        g = sns.FacetGrid(the_data, col='FacetRange', col_wrap=3, height=4, sharey=False)
+        g = self._facet_grid(the_data, sharey=False)
         #g.map(sns.stripplot, 'Treatment', 'FinalPI', 'Transitions', jitter=True)
         g.map_dataframe(custom_plot)
         # Add titles and labels

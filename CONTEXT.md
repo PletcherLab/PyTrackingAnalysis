@@ -58,6 +58,23 @@ loose file into `extra_files/`, and never a `.yaml`, which at an experiment
 root is configuration or declaration) makes it loadable with nothing lost.
 _Avoid_: malformed, non-compliant, unconverted, needs conversion
 
+**Clock Rollback**:
+A DTrack export whose recording clock was set back while the recording ran —
+a time-sync service undoing a time-zone or DST mismatch on the tracking PC is
+the usual cause. `MSec`, `Time` and `Millisec` all come from that clock, so
+they jump backwards together by the size of the adjustment while `Frame`
+carries on; every later frame then looks earlier than it is, a Phase can
+empty out, and every fly can be excluded for "too few transitions". The
+loader refuses such an export by name (`ClockRollbackError`) rather than
+analysing it. The fix is a **repair**: `python -m
+pytrackinganalysis.clock_repair <experiment>` puts the lost time back into
+those three columns from each rollback onwards (snapped to whole hours when
+that is what was lost), changes nothing else, and keeps the untouched files
+in `data_original/` beside `data/`. Only elapsed time matters to the
+analysis, so absolute wall-clock values after a repair are a reconstruction.
+_Avoid_: time drift (drift is gradual; this is a step), corrupt data (nothing
+is lost — the frames are intact), negative time
+
 **Blocked Experiment**:
 An Experiment Directory a run cannot use as it stands: an Unfiled Recording,
 a recording with no `tracking_config.yaml`, or a configured directory with no

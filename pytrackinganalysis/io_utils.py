@@ -15,7 +15,7 @@ from typing import Callable, TextIO, Union
 
 
 def atomic_write_text(path: Union[str, Path], render: Callable[[TextIO], None],
-                      *, encoding: str = "utf-8") -> None:
+                      *, encoding: str = "utf-8", newline: Union[str, None] = None) -> None:
     """Write ``path`` via a temp file in the same directory plus ``os.replace``.
 
     ``render`` is called with an open text handle and should write the complete
@@ -24,6 +24,9 @@ def atomic_write_text(path: Union[str, Path], render: Callable[[TextIO], None],
 
     The temp file is created in the destination's directory (never the system
     temp dir) so the rename stays within one filesystem and is therefore atomic.
+
+    ``newline`` is passed straight to the file object; the ``csv`` module wants
+    ``""`` so the line terminator it writes is not translated on the way out.
     """
     path = Path(path)
     directory = path.parent if str(path.parent) else Path(".")
@@ -32,7 +35,7 @@ def atomic_write_text(path: Union[str, Path], render: Callable[[TextIO], None],
     fd, tmp_name = tempfile.mkstemp(dir=str(directory), prefix=f".{path.name}.",
                                     suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding=encoding) as handle:
+        with os.fdopen(fd, "w", encoding=encoding, newline=newline) as handle:
             render(handle)
             handle.flush()
             os.fsync(handle.fileno())

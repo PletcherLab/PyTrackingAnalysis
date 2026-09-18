@@ -490,6 +490,21 @@ their generic defaults, so double-check the spelling.
 > rather than set to a fixed value.  Only the `movie` rig requires an explicit
 > `fps`.
 
+> **If a load fails with `ClockRollbackError`**, the tracking PC's clock was set
+> back while the recording ran (typically a time sync undoing a time-zone or
+> DST mismatch), so `MSec`, `Time` and `Millisec` jump backwards together while
+> `Frame` carries on.  Only elapsed time matters to the analysis, so put the
+> lost time back:
+>
+> ```bash
+> uv run python -m pytrackinganalysis.clock_repair /path/to/MyExperiment --dry-run   # report only
+> uv run python -m pytrackinganalysis.clock_repair /path/to/MyExperiment             # repair in place
+> ```
+>
+> The repair shifts those three columns from each rollback onwards (snapped to
+> whole hours when that is what was lost), leaves every other column as it
+> was, and keeps the untouched files in `data_original/` beside `data/`.
+
 ---
 
 ### 4.2 `global` — experimental design
@@ -1962,6 +1977,7 @@ unchanged.
 uv sync                   # install / update all dependencies
 uv add <package>          # add a new dependency
 uv run python <script>    # run without activating the environment
+uv run python -m pytrackinganalysis.clock_repair <experiment>  # fix a clock set back mid-recording
 source .venv/bin/activate # activate on macOS / Linux
 .venv\Scripts\Activate.ps1  # activate on Windows PowerShell
 ```

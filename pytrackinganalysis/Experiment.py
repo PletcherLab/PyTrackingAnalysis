@@ -982,6 +982,10 @@ class Experiment:
         plt.show = _save_and_close
         try:
             method(cutoffs=cutoffs)
+        except Arena.NoFacetData as err:
+            ## An empty faceted summary is a finding for QC to report, not a
+            ## reason to abort the load that QC is part of.
+            print(f"Skipping QC facet plot for {metric}: {err}")
         finally:
             plt.show = original_show
 
