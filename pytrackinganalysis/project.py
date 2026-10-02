@@ -102,8 +102,9 @@ def has_experiment_data(path) -> bool:
 def create_project_file(project_dir, name: str | None = None,
                         notes: str = "", design: dict | None = None) -> str:
     """Write (or update) ``project.yaml`` — upgrading e.g. an old batch
-    parent. An existing file's unknown keys are preserved; name/notes are
-    (re)written, and *design* (when given) replaces the ``design:`` section —
+    parent. An existing file's unknown keys are preserved; notes are
+    (re)written, ``name`` is written only when it differs from the directory's
+    own name, and *design* (when given) replaces the ``design:`` section —
     the authoritative shared parameters every replicate must match.
 
     A file with no ``scripts:`` key at all is seeded with the default Project
@@ -118,8 +119,15 @@ def create_project_file(project_dir, name: str | None = None,
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as handle:
             payload = yaml.safe_load(handle) or {}
-    payload["name"] = name or payload.get("name") \
-        or os.path.basename(os.path.normpath(project_dir))
+    ## Store a name only when it differs from the directory's: a stored
+    ## default pins the name at creation, so a project.yaml copied to a
+    ## sibling (or a renamed folder) kept writing reports and summaries under
+    ## the old Project's name. Absent, Project falls back to the directory.
+    folder = os.path.basename(os.path.normpath(str(project_dir)))
+    chosen = name or payload.get("name") or folder
+    payload.pop("name", None)
+    if chosen != folder:
+        payload = {"name": chosen, **payload}       # first, as it always was
     if notes:
         payload["notes"] = notes
     elif "notes" in payload and not notes:
@@ -739,15 +747,12 @@ class Project:
         tt = Parameters.TrackingType[self.tracking_type_name]
         return list(_TRACKING_TYPE_METRICS.get(tt) or []) or ["FinalPI"]
 
-    def comparison_rows(self, summary: pd.DataFrame,
-                        facet: pd.DataFrame | None) -> list[dict]:
-        """One row per metric × phase × treatment pair: pooled Welch/Tukey p
-        beside the mixed-model (experiment random intercept) p."""
-        import itertools
-
-        import numpy as np
-        from scipy import stats as sstats
-
+    def _metric_frames(self, summary: pd.DataFrame,
+                       facet: pd.DataFrame | None):
+        """Yield ``(metric, phase label, data, levels)`` for every metric ×
+        phase: *data* is the tidy Treatment/Experiment/Value frame of flies
+        with a value and an assigned treatment; *levels* counts the assigned
+        treatment levels present before the value filter."""
         frames: list[tuple[str, pd.DataFrame]] = []
         if facet is not None and "FacetRange" in facet.columns:
             windows, label_of = self.window_labels(facet)
@@ -757,55 +762,94 @@ class Project:
         else:
             frames.append(("Whole recording", summary))
 
-        n_experiments = summary["Experiment"].nunique() \
-            if "Experiment" in summary.columns else 1
-        rows: list[dict] = []
         for metric in self._metrics():
             for label, frame in frames:
                 if metric not in frame.columns:
                     continue
-                value = pd.to_numeric(frame[metric], errors="coerce")
+                ## fillna: under pandas 3 astype(str) keeps NaN, and a blank
+                ## Treatment cell read back from CSV is NaN.
+                treatment = frame["Treatment"].fillna("").astype(str).str.strip()
+                levels = treatment[treatment != ""].nunique()
                 data = pd.DataFrame({
-                    "Treatment": frame["Treatment"].astype(str).str.strip(),
+                    "Treatment": treatment,
                     "Experiment": frame.get("Experiment", "one"),
-                    "Value": value,
+                    "Value": pd.to_numeric(frame[metric], errors="coerce"),
                 }).dropna(subset=["Value"])
-                data = data[data["Treatment"] != ""]
-                groups = {t: g["Value"].values
-                          for t, g in data.groupby("Treatment", sort=False)
-                          if len(g) >= 2}
-                if len(groups) < 2:
-                    continue
-                try:
-                    if len(groups) == 2:
-                        (na, va), (nb, vb) = groups.items()
-                        _s, p = sstats.ttest_ind(va, vb, equal_var=False)
-                        pairs = [(na, nb, float(np.mean(vb) - np.mean(va)),
-                                  float(p))]
-                    else:
-                        from statsmodels.stats.multicomp import pairwise_tukeyhsd
-                        endog = np.concatenate(list(groups.values()))
-                        glabels = np.concatenate(
-                            [[t] * len(v) for t, v in groups.items()])
-                        res = pairwise_tukeyhsd(endog=endog, groups=glabels,
-                                                alpha=0.05)
-                        pairs = [(str(a), str(b), float(d), float(p))
-                                 for (a, b), d, p in zip(
-                                     itertools.combinations(res.groupsunique, 2),
-                                     res.meandiffs, res.pvalues)]
-                except Exception:  # noqa: BLE001
-                    continue
-                for a, b, diff, p_pooled in pairs:
-                    p_mixed = self._mixed_p(data, a, b) \
-                        if n_experiments > 1 else None
-                    rows.append({
-                        "metric": metric, "phase": label,
-                        "a": a, "n_a": len(groups[a]),
-                        "b": b, "n_b": len(groups[b]),
-                        "diff": diff, "p_pooled": p_pooled,
-                        "significant": bool(p_pooled < 0.05),
-                        "p_mixed": p_mixed,
-                    })
+                yield metric, label, data[data["Treatment"] != ""], levels
+
+    def comparison_rows(self, summary: pd.DataFrame,
+                        facet: pd.DataFrame | None) -> list[dict]:
+        """One row per metric × phase × treatment pair: pooled Welch/Tukey p
+        beside the mixed-model (experiment random intercept) p."""
+        import itertools
+
+        import numpy as np
+        from scipy import stats as sstats
+
+        n_experiments = summary["Experiment"].nunique() \
+            if "Experiment" in summary.columns else 1
+        rows: list[dict] = []
+        for metric, label, data, _levels in self._metric_frames(summary, facet):
+            groups = {t: g["Value"].values
+                      for t, g in data.groupby("Treatment", sort=False)
+                      if len(g) >= 2}
+            if len(groups) < 2:
+                continue
+            try:
+                if len(groups) == 2:
+                    (na, va), (nb, vb) = groups.items()
+                    _s, p = sstats.ttest_ind(va, vb, equal_var=False)
+                    pairs = [(na, nb, float(np.mean(vb) - np.mean(va)),
+                              float(p))]
+                else:
+                    from statsmodels.stats.multicomp import pairwise_tukeyhsd
+                    endog = np.concatenate(list(groups.values()))
+                    glabels = np.concatenate(
+                        [[t] * len(v) for t, v in groups.items()])
+                    res = pairwise_tukeyhsd(endog=endog, groups=glabels,
+                                            alpha=0.05)
+                    pairs = [(str(a), str(b), float(d), float(p))
+                             for (a, b), d, p in zip(
+                                 itertools.combinations(res.groupsunique, 2),
+                                 res.meandiffs, res.pvalues)]
+            except Exception:  # noqa: BLE001
+                continue
+            for a, b, diff, p_pooled in pairs:
+                p_mixed = self._mixed_p(data, a, b) \
+                    if n_experiments > 1 else None
+                rows.append({
+                    "metric": metric, "phase": label,
+                    "a": a, "n_a": len(groups[a]),
+                    "b": b, "n_b": len(groups[b]),
+                    "diff": diff, "p_pooled": p_pooled,
+                    "significant": bool(p_pooled < 0.05),
+                    "p_mixed": p_mixed,
+                })
+        return rows
+
+    def indifference_rows(self, summary: pd.DataFrame,
+                          facet: pd.DataFrame | None) -> list[dict]:
+        """With a single treatment level: one row per metric × phase testing
+        PI against 0 and Percentage against 0.5 — pooled one-sample t-test
+        beside the mixed-model (experiment random intercept) p."""
+        from . import indifference
+
+        n_experiments = summary["Experiment"].nunique() \
+            if "Experiment" in summary.columns else 1
+        rows: list[dict] = []
+        for metric, label, data, levels in self._metric_frames(summary, facet):
+            if levels != 1:
+                continue
+            result = indifference.one_sample(data["Value"], metric)
+            if result is None:
+                continue
+            rows.append({
+                "metric": metric, "phase": label,
+                "treatment": str(data["Treatment"].iloc[0]), **result,
+                "significant": bool(result["p"] < 0.05),
+                "p_mixed": (self._mixed_p_vs(data, result["null"])
+                            if n_experiments > 1 else None),
+            })
         return rows
 
     @staticmethod
@@ -829,8 +873,34 @@ class Project:
         except Exception:  # noqa: BLE001
             return None
 
+    @staticmethod
+    def _mixed_p_vs(data: pd.DataFrame, null: float) -> float | None:
+        """p-value that the mean differs from *null*, from an intercept-only
+        linear mixed model on (Value − null) with a per-Experiment random
+        intercept — the single-treatment companion of :meth:`_mixed_p`."""
+        try:
+            import warnings
+
+            import statsmodels.formula.api as smf
+            if data["Experiment"].nunique() < 2:
+                return None
+            sub = data.assign(Deviation=data["Value"] - null)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                model = smf.mixedlm("Deviation ~ 1", sub,
+                                    groups=sub["Experiment"])
+                ## Not lbfgs (which _mixed_p uses): on an intercept-only
+                ## model it raises "Singular matrix" even when the replicates
+                ## differ. bfgs converges; powell is the fallback.
+                fit = model.fit(reml=True, method=["bfgs", "powell"])
+            return float(fit.pvalues["Intercept"])
+        except Exception:  # noqa: BLE001
+            return None
+
     def stats_text(self, summary: pd.DataFrame,
                    facet: pd.DataFrame | None) -> str:
+        from . import indifference
+
         rows = self.comparison_rows(summary, facet)
         bar = "=" * 72
         lines = [bar, f"Project statistics — {self.name}",
@@ -860,6 +930,23 @@ class Project:
             lines.append(
                 f"{r['metric']:<20} {r['phase']:<14} {a:<18} {b:<18} "
                 f"{r['diff']:>+8.3f} {r['p_pooled']:>10.4g} {mixed:>10}")
+
+        one_rows = self.indifference_rows(summary, facet)
+        if one_rows:
+            lines += ["", "Tests against indifference (single treatment level)",
+                      f"Pooled p: {indifference.TEST_NAME} of PI against 0 and",
+                      "Percentage against 0.5 (50%). Mixed p: intercept-only",
+                      "mixed model (experiment random intercept) against the",
+                      "same value.", ""]
+            header = (f"{'Metric':<20} {'Phase':<14} {'Treatment':<18} "
+                      f"{'mean':>8} {'null':>6} {'pooled p':>10} {'mixed p':>10}")
+            lines += [header, "-" * len(header)]
+            for r in one_rows:
+                mixed = f"{r['p_mixed']:.4g}" if r["p_mixed"] is not None else "—"
+                treat = f"{r['treatment']} (n={r['n']})"
+                lines.append(
+                    f"{r['metric']:<20} {r['phase']:<14} {treat:<18} "
+                    f"{r['mean']:>8.3f} {r['null']:>6g} {r['p']:>10.4g} {mixed:>10}")
         return "\n".join(lines) + "\n"
 
     # ------------------------------------------------------------------
@@ -1111,6 +1198,20 @@ class Project:
                         "a per-experiment random intercept. α = 0.05 on the "
                         "pooled test; no multiplicity correction. Full text "
                         "in the _Stats.txt output."))
+
+        from . import indifference
+        from .report_figures import indifference_table
+
+        one_rows, one_levels = [], []
+        for r in self.indifference_rows(summary, facet):
+            mixed = f"{r['p_mixed']:.4g}" if r["p_mixed"] is not None else "—"
+            one_rows.append([r["metric"], r["phase"],
+                             f"{r['treatment']} (n={r['n']})",
+                             f"{r['mean']:.3f}", indifference.null_label(r["metric"]),
+                             f"{r['diff']:+.3f}", f"{r['p']:.4g}", mixed])
+            one_levels.append(_m.Level.OK if r["significant"] else None)
+        if one_rows:
+            report.add(indifference_table(one_rows, one_levels, mixed=True))
 
         report.add(_m.SectionDivider("Replicates"))
         rep_rows, rep_levels = [], []

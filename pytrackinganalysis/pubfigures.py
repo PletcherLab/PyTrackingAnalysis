@@ -157,7 +157,8 @@ class PlotSpec:
     y_limits: list | None = None
     ref_line: float | None = None
     #: Draw per-facet pairwise p-value brackets (Welch for two shown
-    #: treatments, Tukey HSD beyond — the same policy as Stats.txt).
+    #: treatments, Tukey HSD beyond — the same policy as Stats.txt); with one
+    #: shown treatment, PI/Percentage's p-value against indifference.
     p_values: bool = False
     #: Independent y axis per facet (ggplot's scales='free_y') — the default
     #: for unbounded metrics (movement, transitions). When on, ``y_limits``
@@ -298,12 +299,13 @@ def faceted_data(experiment, metric: str) -> pd.DataFrame:
     if metric not in summary.columns:
         return pd.DataFrame(columns=["Treatment", "Phase", "Value"])
     df = pd.DataFrame({
-        "Treatment": summary["Treatment"].astype(str).str.strip(),
+        ## fillna first: under pandas 3 astype(str) keeps NaN as NaN, so a
+        ## blank Treatment cell slipped past the != "" filter as a float.
+        "Treatment": summary["Treatment"].fillna("").astype(str).str.strip(),
         "Phase": pd.Categorical(phase, categories=labels, ordered=True),
         "Value": pd.to_numeric(summary[metric], errors="coerce"),
     })
-    df = df[(df["Treatment"] != "") & df["Value"].notna()]
-    return df.reset_index(drop=True)
+    return _drop_unplottable(df, metric)
 
 
 def faceted_data_from_combined(facet_df: pd.DataFrame, metric: str,
@@ -318,15 +320,30 @@ def faceted_data_from_combined(facet_df: pd.DataFrame, metric: str,
     if metric not in facet_df.columns:
         return pd.DataFrame(columns=["Treatment", "Phase", "Value"])
     df = pd.DataFrame({
-        "Treatment": facet_df["Treatment"].astype(str).str.strip(),
+        "Treatment": facet_df["Treatment"].fillna("").astype(str).str.strip(),
         "Phase": pd.Categorical(facet_df["FacetRange"].map(label_for),
                                 categories=list(phase_labels), ordered=True),
         "Value": pd.to_numeric(facet_df[metric], errors="coerce"),
     })
     if "Experiment" in facet_df.columns:
         df["Experiment"] = facet_df["Experiment"].astype(str)
-    df = df[(df["Treatment"] != "") & df["Value"].notna()]
-    return df.reset_index(drop=True)
+    return _drop_unplottable(df, metric)
+
+
+def _drop_unplottable(df: pd.DataFrame, metric: str) -> pd.DataFrame:
+    """Drop rows with no treatment (an unassigned region) or no value.
+
+    How many rows went for want of a treatment rides along in ``attrs``, so a
+    figure left with nothing to draw can say so (:class:`NoPlotData`) instead
+    of failing deep inside plotnine. So does the metric: a single shown
+    treatment's p-value is a test against the metric's indifference value.
+    """
+    unassigned = df["Treatment"] == ""
+    kept = df[~unassigned & df["Value"].notna()].reset_index(drop=True)
+    kept.attrs["n_rows"] = len(df)
+    kept.attrs["n_unassigned"] = int(unassigned.sum())
+    kept.attrs["metric"] = metric
+    return kept
 
 
 def data_treatments(df: pd.DataFrame) -> list[str]:
@@ -445,20 +462,51 @@ def _theme_for(style: PlotStyle, n_facets: int | None = None,
                 base_family=families[0]) + p9.theme(**overrides)
 
 
+class NoPlotData(ValueError):
+    """A figure has nothing to draw. The message says why and what to change —
+    plotnine's own word for it is "Faceted variables must have at least one
+    value", which names neither."""
+
+
+def _no_data_reason(df: pd.DataFrame, order: list, include: list) -> str:
+    if df.empty:
+        total = df.attrs.get("n_rows", 0)
+        if total and df.attrs.get("n_unassigned", 0) == total:
+            return ("No fly has a treatment assigned: every tracking region's "
+                    "experimental_factors is blank. Assign treatments on the "
+                    "Config Editor's Tracking regions tab, then re-run the "
+                    "analysis.")
+        return ("No data to plot: no fly has a value for this metric (every "
+                "fly was excluded, or the metric was not measured).")
+    if not order:
+        return "Every treatment is hidden — tick at least one under Treatments."
+    if not include:
+        return ("None of this plot's facets are in the data — tick at least "
+                "one under Facets.")
+    return "No fly in the shown treatments has data in the selected facets."
+
+
 def build_ggplot(df: pd.DataFrame, spec: PlotSpec, style: PlotStyle):
     """The plotnine figure for a faceted metric plot: per-treatment jittered
-    points, a mean with SEM overlay, one panel per phase."""
+    points, a mean with SEM overlay, one panel per phase.
+
+    Raises :class:`NoPlotData` when nothing is left to draw."""
     import numpy as np
     import plotnine as p9
 
     treatments = merged_treatments(spec, df)
     order = [name for name, entry in treatments.items() if entry.get("show", True)]
+    if df.empty:
+        ## Before .cat: the metric-missing frame has no categorical Phase.
+        raise NoPlotData(_no_data_reason(df, order, []))
     data = df[df["Treatment"].isin(order)].copy()
 
     # Facet inclusion and per-figure renaming.
     all_phases = list(data["Phase"].cat.categories)
     include = [p for p in (spec.facets or all_phases) if p in all_phases]
     data = data[data["Phase"].isin(include)].copy()
+    if data.empty:
+        raise NoPlotData(_no_data_reason(df, order, include))
     shown = [str(spec.facet_labels.get(p, p)) for p in include]
     data["Phase"] = pd.Categorical(
         data["Phase"].astype(str).map(lambda p: str(spec.facet_labels.get(p, p))),
@@ -542,7 +590,8 @@ def build_ggplot(df: pd.DataFrame, spec: PlotSpec, style: PlotStyle):
     y_limits = (list(spec.y_limits)
                 if spec.y_limits is not None and not spec.free_y else None)
     if spec.p_values:
-        layers, y_limits = _pvalue_layers(data, style, y_limits)
+        layers, y_limits = _pvalue_layers(data, style, y_limits,
+                                          metric=df.attrs.get("metric"))
         for layer in layers:
             g = g + layer
 
@@ -567,10 +616,15 @@ def mean_overlay(data: pd.DataFrame, mean_style: str) -> pd.DataFrame:
     return stats
 
 
-def facet_pvalues(data: pd.DataFrame) -> pd.DataFrame:
-    """Per-facet pairwise p-values on the displayed groups — Welch's t-test
-    for two treatments, Tukey HSD beyond, the same policy as Stats.txt.
-    Columns: ``Phase, a, b, p`` (a/b are display labels)."""
+def facet_pvalues(data: pd.DataFrame, metric: str | None = None) -> pd.DataFrame:
+    """Per-facet p-values on the displayed groups — the same policy as
+    Stats.txt: Welch's t-test for two treatments, Tukey HSD beyond, and for
+    a single shown treatment of a *metric* with an indifference value (PI,
+    Percentage) a one-sample test against it.
+    Columns: ``Phase, a, b, p`` (a/b are display labels; ``b`` is None for a
+    test against indifference)."""
+    from . import indifference
+
     def _levels(series: pd.Series):
         if isinstance(series.dtype, pd.CategoricalDtype):
             return list(series.cat.categories)
@@ -579,8 +633,15 @@ def facet_pvalues(data: pd.DataFrame) -> pd.DataFrame:
     rows: list = []
     for phase in _levels(data["Phase"]):
         sub = data[data["Phase"] == phase]
+        levels = _levels(sub["Treatment"])
+        if len(levels) == 1:
+            result = (indifference.one_sample(sub["Value"], metric)
+                      if metric else None)
+            if result is not None:
+                rows.append((phase, str(levels[0]), None, result["p"]))
+            continue
         groups = {}
-        for treat in _levels(sub["Treatment"]):
+        for treat in levels:
             vals = sub.loc[sub["Treatment"] == treat, "Value"].values
             if len(vals) >= 2:
                 groups[str(treat)] = vals
@@ -610,16 +671,19 @@ def facet_pvalues(data: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["Phase", "a", "b", "p"])
 
 
-def _pvalue_layers(data: pd.DataFrame, style: PlotStyle, y_limits):
+def _pvalue_layers(data: pd.DataFrame, style: PlotStyle, y_limits,
+                   metric: str | None = None):
     """Bracket + label layers for per-facet pairwise p-values, ggpubr-style.
 
     Brackets stack above each facet's data; when explicit y-limits would clip
-    them the upper limit is extended, so the annotation is never cut off.
+    them the upper limit is extended, so the annotation is never cut off. A
+    test against indifference (one shown treatment) has no pair to bracket:
+    its p-value sits alone above the group, at the height a bracket would.
     Returns ``(layers, effective_y_limits)``.
     """
     import plotnine as p9
 
-    pvals = facet_pvalues(data)
+    pvals = facet_pvalues(data, metric)
     if pvals.empty:
         return [], y_limits
     levels = (list(data["Treatment"].cat.categories)
@@ -639,15 +703,21 @@ def _pvalue_layers(data: pd.DataFrame, style: PlotStyle, y_limits):
     for phase in pvals["Phase"].unique():
         base = float(data.loc[data["Phase"] == phase, "Value"].max())
         for k, (_, row) in enumerate(pvals[pvals["Phase"] == phase].iterrows()):
-            x1, x2 = xpos[row["a"]], xpos[row["b"]]
             y = base + step * (k + 0.7)
-            seg_rows += [
-                (phase, x1, x2, y, y),           # bracket bar
-                (phase, x1, x1, y, y - tick),    # left tick
-                (phase, x2, x2, y, y - tick),    # right tick
-            ]
-            label_rows.append((phase, (x1 + x2) / 2, y + tick * 0.6,
-                               f"{row['p']:.2g}"))
+            if pd.isna(row["b"]):
+                ## vs indifference: no bracket to say what the number is,
+                ## so the label names itself.
+                x1 = x2 = xpos[row["a"]]
+                label = f"p = {row['p']:.2g}"
+            else:
+                x1, x2 = xpos[row["a"]], xpos[row["b"]]
+                seg_rows += [
+                    (phase, x1, x2, y, y),           # bracket bar
+                    (phase, x1, x1, y, y - tick),    # left tick
+                    (phase, x2, x2, y, y - tick),    # right tick
+                ]
+                label = f"{row['p']:.2g}"
+            label_rows.append((phase, (x1 + x2) / 2, y + tick * 0.6, label))
             top = max(top, y + step * 0.6)
     segments = pd.DataFrame(seg_rows,
                             columns=["Phase", "x", "xend", "y", "yend"])
@@ -662,13 +732,15 @@ def _pvalue_layers(data: pd.DataFrame, style: PlotStyle, y_limits):
                                          ordered=True)
 
     layers = [
-        p9.geom_segment(p9.aes(x="x", xend="xend", y="y", yend="yend"),
-                        data=segments, inherit_aes=False, color="#111111",
-                        size=max(style.line_pt * 0.6, 0.3)),
         p9.geom_text(p9.aes(x="x", y="y", label="label"), data=labels,
                      inherit_aes=False, color="#111111",
                      size=style.p_value_pt, va="bottom"),
     ]
+    if not segments.empty:          # tests against indifference draw none
+        layers.insert(0, p9.geom_segment(
+            p9.aes(x="x", xend="xend", y="y", yend="yend"),
+            data=segments, inherit_aes=False, color="#111111",
+            size=max(style.line_pt * 0.6, 0.3)))
     if y_limits is not None and top > y_limits[1]:
         y_limits = [y_limits[0], top]
     return layers, y_limits

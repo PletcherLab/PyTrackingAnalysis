@@ -268,6 +268,52 @@ def test_report_model_renders_stats_as_table_not_text(tmp_path):
     assert "Experiment Summary" in dividers
     assert any(t.title == "Configuration" for t in tables)
     assert any(t.title == "Parameters" for t in tables)
+    # Two treatments: compared with each other, not against indifference.
+    assert not any(t.title == "Tests against indifference" for t in tables)
+
+
+def _single_treatment_summary():
+    s = _twochoice_summary()
+    s["Treatment"] = "chr"
+    s["FinalPI"] = np.linspace(0.3, 0.7, len(s))       # a clear preference
+    return s
+
+
+def test_single_treatment_report_tests_against_indifference(tmp_path):
+    """One treatment level leaves no pair to compare; PI is tested against 0
+    and Percentage against 0.5 instead, in a table of its own."""
+    exp = _model_exp(tmp_path, exp_type_name="Valence", facet_cutoffs=[10])
+    exp.arena = _FakeArena(_single_treatment_summary())
+    exp.arena.experiment_name = "E"
+    tables = report_figures.build_stats_table(exp)
+    assert [t.title for t in tables] == ["Tests against indifference"]
+    rows = tables[0].rows
+    # PI and Percentage once per phase (2 phases); movement has no null.
+    assert [r[0] for r in rows] == ["FinalPI"] * 2 + ["FinalPercentage"] * 2
+    pi = rows[0]
+    assert pi[2] == "chr (n=8)" and pi[4] == "0" and pi[-1] == "yes"
+    assert rows[2][4] == "0.5 (50%)"
+
+
+def test_single_treatment_stats_file_tests_against_indifference(capsys):
+    from pytrackinganalysis.Arena import Arena
+
+    class _StatsArena(_FakeArena):
+        _treatment_arms = Arena.__dict__["_treatment_arms"]
+        _print_group_comparison = Arena.__dict__["_print_group_comparison"]
+        _print_indifference_test = Arena.__dict__["_print_indifference_test"]
+        run_pairwise_comparisons_facet = Arena.run_pairwise_comparisons_facet
+
+    arena = _StatsArena(_single_treatment_summary())
+    assert arena.run_pairwise_comparisons_facet(metric="FinalPI") is None
+    out = capsys.readouterr().out
+    assert out.count("Test against indifference") == 3       # one per phase
+    assert "chr (n=8" in out and "indifference = 0:" in out
+    assert "one-sample t-test" in out
+    assert "3 independent t-tests" in out          # the Bonferroni note
+    # A metric with no null stays "not applicable" with one treatment.
+    msg = arena.run_pairwise_comparisons_facet(metric="TotalDistancePerMin")
+    assert msg.startswith("Not applicable")
 
 
 # --------------------------------------------------------------------------

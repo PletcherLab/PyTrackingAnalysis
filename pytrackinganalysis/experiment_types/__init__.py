@@ -6,13 +6,14 @@ two architectural decisions (the type owns/derives config; it is a composed
 base-class strategy).
 """
 
-from .base import ExperimentType
+from .base import ExperimentType, sole_treatment
 from .custom import CustomExperimentType
 from .registry import available_experiment_types, get_experiment_type
 from .valence import ValenceExperimentType
 
 __all__ = [
     "ExperimentType",
+    "sole_treatment",
     "CustomExperimentType",
     "ValenceExperimentType",
     "get_experiment_type",

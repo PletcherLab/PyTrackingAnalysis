@@ -182,6 +182,15 @@ class PlotEditorWindow(QMainWindow):
         self._render_timer.setInterval(250)
         self._render_timer.timeout.connect(self._render_preview)
 
+        ## Edits reach plot_specs.yaml shortly after they are made, not only
+        ## on a save button or on close: the Hub's project report and the
+        ## render_publication_figures step read that file, so a ticked
+        ## checkbox in an editor still open was invisible to them.
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(500)
+        self._save_timer.timeout.connect(self._persist_specs)
+
         self._build_ui(initial_path)
         if initial_path:
             self.open_project(initial_path)
@@ -245,7 +254,10 @@ class PlotEditorWindow(QMainWindow):
         split.addWidget(self._build_controls())
         self.preview = QLabel("Open a project to begin.")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setStyleSheet("QLabel { background: white; }")
+        ## The pane also carries text (NoPlotData's reason): wrap it, and pin
+        ## its color so the dark theme's light text is not lost on white.
+        self.preview.setWordWrap(True)
+        self.preview.setStyleSheet("QLabel { background: white; color: #333; }")
         preview_scroll = QScrollArea()
         preview_scroll.setWidget(self.preview)
         preview_scroll.setWidgetResizable(True)
@@ -394,6 +406,11 @@ class PlotEditorWindow(QMainWindow):
         ref_holder.setLayout(ref_row)
         sform.addRow("Reference line:", ref_holder)
         self.pvalues_check = QCheckBox("Welch / Tukey per facet")
+        self.pvalues_check.setToolTip(
+            "Two shown treatments: Welch's t-test; three or more: Tukey HSD. "
+            "One shown treatment: PI is tested against 0 and Percentage "
+            "against 0.5 (one-sample t-test), the p-value printed above the "
+            "group.")
         sform.addRow("P-value brackets:", self.pvalues_check)
         self.mark_check = QCheckBox("point shape per replicate")
         self.mark_check.setToolTip(
@@ -504,6 +521,12 @@ class PlotEditorWindow(QMainWindow):
                 self.statusBar().showMessage(
                     "Not opened: publication figures are project-level.")
                 return
+        ## The current project's edits go to ITS plot_specs.yaml before the
+        ## next project's file replaces them in memory.
+        if self._loaded:
+            self._save_timer.stop()
+            self._read_controls()
+            self._persist_specs()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self.statusBar().showMessage(f"Loading {path} …")
         QApplication.processEvents()
@@ -778,6 +801,11 @@ class PlotEditorWindow(QMainWindow):
             return
         self._read_controls()
         self._schedule_render()
+        self._schedule_save()
+
+    def _schedule_save(self) -> None:
+        if self._loaded:
+            self._save_timer.start()
 
     def _on_plot_switched(self, _index: int) -> None:
         if self._updating:
@@ -797,6 +825,7 @@ class PlotEditorWindow(QMainWindow):
         self._current_spec().style = name
         self._load_controls()
         self._schedule_render()
+        self._schedule_save()
 
     def _move_treatment(self, delta: int) -> None:
         row = self.treat_table.currentRow()
@@ -811,6 +840,7 @@ class PlotEditorWindow(QMainWindow):
         self._load_controls()
         self.treat_table.selectRow(target)
         self._schedule_render()
+        self._schedule_save()
 
     # ---------------------------------------------------------- rendering
 
@@ -827,6 +857,12 @@ class PlotEditorWindow(QMainWindow):
         try:
             g = pf.build_ggplot(data, spec, style)
             png = pf.render_png_bytes(g, style, dpi=130)
+        except pf.NoPlotData as err:
+            ## In the preview pane, not just the status bar: the reason is
+            ## the whole content of the window until the user acts on it.
+            self.preview.setText(str(err))
+            self.statusBar().showMessage("Nothing to plot")
+            return
         except Exception as err:  # noqa: BLE001
             self.statusBar().showMessage(f"Render failed: {err}")
             return
@@ -905,6 +941,7 @@ class PlotEditorWindow(QMainWindow):
             f"{pf.PLOT_TYPES[self._plot_id]['display']} reset to defaults")
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        self._save_timer.stop()
         if self._loaded:
             self._read_controls()
             self._persist_specs()

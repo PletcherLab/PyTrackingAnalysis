@@ -17,6 +17,31 @@ from __future__ import annotations
 from .. import Parameters, config_validation
 
 
+def sole_treatment(factors) -> dict[str, str]:
+    """``{factor: level}`` when the design admits exactly one treatment —
+    every factor has a single level — else ``{}``.
+
+    A new region in such a design has only one possible assignment, so it is
+    written with it rather than blank: a blank region is unassigned, every fly
+    on the plate is dropped from stats and figures, and nothing says why. Only
+    an all-single-level design qualifies: prefilling one factor of several
+    would turn an untouched (perhaps deliberately empty) well into a
+    half-assigned treatment arm.
+    """
+    levels_of = dict(factors or {})
+    if not levels_of:
+        return {}
+    sole: dict[str, str] = {}
+    for name, levels in levels_of.items():
+        if not isinstance(levels, (list, tuple)) or len(levels) != 1:
+            return {}
+        level = str(levels[0]).strip()
+        if not level:
+            return {}
+        sole[str(name)] = level
+    return sole
+
+
 class ExperimentType:
     """Permissive base type. A Custom Experiment uses this behaviour directly."""
 

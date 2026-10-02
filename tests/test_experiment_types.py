@@ -149,6 +149,29 @@ def test_valence_small_arena_is_six_wells_with_no_flips():
     assert any("6 tracking regions" in p for p in t.validate(cfg))
 
 
+def test_sole_treatment_only_when_the_design_admits_one():
+    assert et.sole_treatment({"Genotype": ["Chr"]}) == {"Genotype": "Chr"}
+    assert et.sole_treatment({"Genotype": ["Chr"], "Sex": ["F"]}) == \
+        {"Genotype": "Chr", "Sex": "F"}
+    # Any choice anywhere, no factors, or a malformed level list: no default.
+    assert et.sole_treatment({"Genotype": ["Chr"], "Sex": ["M", "F"]}) == {}
+    assert et.sole_treatment({}) == {}
+    assert et.sole_treatment(None) == {}
+    assert et.sole_treatment({"Genotype": []}) == {}
+    assert et.sole_treatment({"Genotype": "Chr"}) == {}
+    assert et.sole_treatment({"Genotype": [" "]}) == {}
+
+
+def test_valence_build_config_assigns_a_sole_treatment():
+    t = et.get_experiment_type("Valence")
+    regions = t.build_config(rig="small_arena", factors={
+        "Genotype": ["Chr"], "Sex": ["F"]})["tracking_regions"]
+    assert {r["experimental_factors"] for r in regions.values()} == {"Chr, F"}
+    regions = t.build_config(rig="small_arena", factors={
+        "Genotype": ["Chr", "Ctrl"]})["tracking_regions"]
+    assert {r["experimental_factors"] for r in regions.values()} == {""}
+
+
 def test_valence_rejects_wrong_rig():
     t = et.get_experiment_type("Valence")
     problems = t.validate(_valence_config(rig="obscura"))

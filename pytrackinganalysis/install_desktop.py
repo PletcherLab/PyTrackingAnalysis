@@ -28,6 +28,8 @@ _APPS = [
      "Edit tracking_config.yaml and saved script recipes"),
     ("pytrack-qc", "PyTrackingAnalysis QC Viewer",
      "Per-tracker data-quality tables and plots"),
+    ("pytrack-plots", "PyTrackingAnalysis Plot Editor",
+     "Style and export publication figures"),
 ]
 
 _ICON_NAME = "pytrackinganalysis"

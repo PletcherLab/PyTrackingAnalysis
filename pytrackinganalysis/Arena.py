@@ -1678,6 +1678,39 @@ class Arena:
             print(f"  note: {dropped} tracker(s) excluded — no numeric {metric} in this window.")
         return True
 
+    @staticmethod
+    def _print_indifference_test(subset, metric, treatment, window_label):
+        """Print the one-sample test of a single treatment against the
+        metric's indifference value (PI = 0, Percentage = 0.5).
+
+        Returns True when a test was run. A metric with no natural null (e.g.
+        TotalDistancePerMin) is not applicable, as before.
+        """
+        from . import indifference
+
+        if indifference.null_for(metric) is None:
+            return False
+        numeric = pd.to_numeric(subset[metric], errors='coerce')
+        result = indifference.one_sample(numeric, metric)
+        if result is None:
+            n = int(numeric.notna().sum())
+            why = ("every value is identical, so the t-test is undefined"
+                   if n >= 2 else "too few numeric values")
+            print(f"Warning: cannot test {metric} against indifference in "
+                  f"{window_label} (n={n}): {why}. Skipping.")
+            return False
+        print("############# Test against indifference #############")
+        print(f"Column = {metric}, Range Minutes = {window_label}")
+        print(f"{treatment} (n={result['n']}, mean={result['mean']:.4g}, "
+              f"sd={result['sd']:.4g}) vs. indifference = "
+              f"{indifference.null_label(metric)}: "
+              f"T={result['t']:.2f}, p={result['p']:.5f}")
+        print(f"Test: {indifference.TEST_NAME}")
+        dropped = len(subset) - result['n']
+        if dropped:
+            print(f"  note: {dropped} tracker(s) excluded — no numeric {metric} in this window.")
+        return True
+
     def run_pairwise_comparisons(self, metric='FinalPI', range_minutes=(0,0), equal_var=False):
         """
         Run pairwise comparisons for a given metric.
@@ -1711,6 +1744,11 @@ class Arena:
         window_label = f"({range_minutes[0]:.2f} , {range_minutes[1]:.2f})"
 
         if(len(treatments)<2):
+            ## One treatment: nothing to compare between, but PI/Percentage
+            ## can still be tested against indifference.
+            if len(treatments) == 1 and self._print_indifference_test(
+                    summary, metric, treatments[0], window_label):
+                return None
             msg = f"Not applicable: {metric} has fewer than two treatment levels."
             print(msg)
             return msg
@@ -1757,11 +1795,17 @@ class Arena:
         for frange in summary['FacetRange'].unique():
             subset = summary[summary['FacetRange'] == frange]
             treatments = list(pd.unique(subset['Treatment'].astype(str).str.strip()))
+            window_label = f"({frange[0]:.2f} , {frange[1]:.2f})"
             if(len(treatments)<2):
+                if len(treatments) == 1 and self._print_indifference_test(
+                        subset, metric, treatments[0], window_label):
+                    applicable = True
+                    tests_run += 1
+                    print("\n")
+                    continue
                 print(f"Not applicable for facet {frange}: fewer than two treatment levels.")
                 continue
             applicable = True
-            window_label = f"({frange[0]:.2f} , {frange[1]:.2f})"
             if(len(treatments)==2):
                 if self._print_group_comparison(subset, metric, treatments, window_label, equal_var=equal_var):
                     tests_run += 1

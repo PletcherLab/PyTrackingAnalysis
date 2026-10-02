@@ -969,7 +969,12 @@ class TrackingRegionsTab(QWidget):
         y: str | int = 1,
         extra_factors: list[str] | None = None,
     ) -> None:
-        factor_values = factor_values or {}
+        ## None means a brand-new row (Add, Generate, a rig's plate): give it
+        ## the design's only treatment when there is just one. A row being
+        ## loaded or re-rendered passes a dict and keeps exactly what it had —
+        ## a blank there may be a deliberately empty well.
+        if factor_values is None:
+            factor_values = _et.sole_treatment(self._factors)
         r = self.table.rowCount()
         self.table.insertRow(r)
         name_item = QTableWidgetItem(name or f"T_{r}")

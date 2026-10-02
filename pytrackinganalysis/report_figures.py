@@ -667,8 +667,11 @@ def build_stats_table(experiment) -> list:
 
     Mirrors ``Experiment.stats``: Welch's t-test for two treatment levels,
     Tukey HSD for three or more, per facet phase (or the whole recording when
-    no facets are configured).
+    no facets are configured). With a single treatment level, PI and
+    Percentage are tested against indifference instead — a second table.
     """
+    from . import indifference
+
     try:
         metrics = experiment._stats_metrics()
     except Exception:  # noqa: BLE001
@@ -680,6 +683,7 @@ def build_stats_table(experiment) -> list:
         windows, labels = [(0, 0)], ["Whole recording"]
 
     rows, levels = [], []
+    one_rows, one_levels = [], []
     for metric in metrics:
         remove_partners = "Interacting" in metric
         for window, label in zip(windows, labels):
@@ -690,8 +694,25 @@ def build_stats_table(experiment) -> list:
                 continue
             if summary is None or metric not in getattr(summary, "columns", []):
                 continue
+            treatments = _treatments(summary)
+            if len(treatments) == 1:
+                ## Decided on the levels present, not on the groups with
+                ## enough data: a two-arm experiment with one thin arm is not
+                ## a single-treatment experiment.
+                mask = summary["Treatment"].astype(str).str.strip() == treatments[0]
+                result = indifference.one_sample(
+                    _numeric(summary[mask], metric), metric)
+                if result is not None:
+                    significant = result["p"] < 0.05
+                    one_rows.append([
+                        metric, label, f"{treatments[0]} (n={result['n']})",
+                        f"{result['mean']:.3f}", indifference.null_label(metric),
+                        f"{result['diff']:+.3f}", f"{result['p']:.4g}",
+                        "yes" if significant else "no"])
+                    one_levels.append(m.Level.OK if significant else None)
+                continue
             groups: dict[str, np.ndarray] = {}
-            for treat in _treatments(summary):
+            for treat in treatments:
                 mask = summary["Treatment"].astype(str).str.strip() == treat
                 vals = _numeric(summary[mask], metric).dropna().values
                 if len(vals) >= 2:
@@ -728,17 +749,46 @@ def build_stats_table(experiment) -> list:
                              f"{diff:+.3f}", f"{p:.4g}",
                              "yes" if significant else "no"])
                 levels.append(m.Level.OK if significant else None)
-    if not rows:
-        return []
-    return [m.Table(
-        columns=["Metric", "Phase", "Group A", "Group B", "Mean diff (B − A)",
-                 "p-value", "Significant"],
-        rows=rows, row_levels=levels,
-        title="Statistical comparisons",
-        caption="Welch's t-test for two treatment levels, Tukey HSD for three "
-                "or more; α = 0.05. P-values are per test — no multiplicity "
-                "correction across phases or metrics. Full test output is in "
-                "the _Stats.txt file.")]
+    blocks = []
+    if rows:
+        blocks.append(m.Table(
+            columns=["Metric", "Phase", "Group A", "Group B", "Mean diff (B − A)",
+                     "p-value", "Significant"],
+            rows=rows, row_levels=levels,
+            title="Statistical comparisons",
+            caption="Welch's t-test for two treatment levels, Tukey HSD for three "
+                    "or more; α = 0.05. P-values are per test — no multiplicity "
+                    "correction across phases or metrics. Full test output is in "
+                    "the _Stats.txt file."))
+    if one_rows:
+        blocks.append(indifference_table(one_rows, one_levels))
+    return blocks
+
+
+def indifference_table(rows, row_levels, mixed: bool = False):
+    """The single-treatment tests against indifference as a report table —
+    shared by the experiment and Project reports so they read alike. With
+    *mixed*, rows carry a pooled and a mixed-model p and no Significant
+    column (Project) — like the Project's pairwise table, the row highlight
+    says it, and the width goes to the second p."""
+    p_columns = (["Pooled p", "Mixed p"] if mixed else ["p-value", "Significant"])
+    caption = ("One treatment level, so no between-treatment comparison: each "
+               "phase's PI is tested against 0 and Percentage against 0.5 "
+               "(50%) — indifference between the counting regions — with a "
+               "two-sided one-sample t-test; α = 0.05, no multiplicity "
+               "correction across phases or metrics.")
+    if mixed:
+        caption += (" Pooled p: all flies pooled across replicates. Mixed p: "
+                    "linear mixed model (per-experiment random intercept) "
+                    "testing the mean against the same value.")
+    else:
+        caption += " Full test output is in the _Stats.txt file."
+    return m.Table(
+        columns=["Metric", "Phase", "Treatment", "Mean", "Indifference",
+                 "Mean − indifference", *p_columns],
+        rows=rows, row_levels=row_levels,
+        title="Tests against indifference",
+        caption=caption)
 
 
 # --------------------------------------------------------------------------

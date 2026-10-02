@@ -172,6 +172,51 @@ def test_bar_sem_style_and_hidden_treatment(tmp_path):
     assert ">chr<" not in svg             # hidden treatment absent from axis
 
 
+def test_missing_treatments_are_dropped_not_passed_as_nan(tmp_path):
+    """Under pandas 3 ``astype(str)`` keeps NaN, so a blank Treatment cell read
+    back from CSV reached the editor's table as a float and crashed it."""
+    s = _summary()
+    s["Treatment"] = s["Treatment"].astype(object)
+    s.loc[0, "Treatment"] = np.nan
+    df = pf.faceted_data(_Exp(s, tmp_path), "FinalPI")
+    assert pf.data_treatments(df) == ["chr", "control"]
+
+    facet = pd.DataFrame({"Treatment": ["chr", np.nan, "control"],
+                          "FacetRange": ["w"] * 3, "FinalPI": [0.1, 0.2, 0.3]})
+    df = pf.faceted_data_from_combined(facet, "FinalPI", ["W"], lambda v: "W")
+    assert pf.data_treatments(df) == ["chr", "control"]
+
+
+def test_nothing_to_plot_says_why(tmp_path):
+    """plotnine's "Faceted variables must have at least one value" names
+    neither the cause nor the fix; NoPlotData names both."""
+    spec, style = pf.default_spec("faceted_pi"), pf.PlotStyle()
+
+    s = _summary()
+    s["Treatment"] = ""                       # every region left unassigned
+    df = pf.faceted_data(_Exp(s, tmp_path), "FinalPI")
+    with pytest.raises(pf.NoPlotData, match="experimental_factors"):
+        pf.build_ggplot(df, spec, style)
+
+    s = _summary()
+    s["FinalPI"] = np.nan                     # assigned, but nothing measured
+    df = pf.faceted_data(_Exp(s, tmp_path), "FinalPI")
+    with pytest.raises(pf.NoPlotData, match="no fly has a value"):
+        pf.build_ggplot(df, spec, style)
+
+    # The metric-missing frame has no categorical Phase: still NoPlotData.
+    df = pf.faceted_data(_Exp(_summary(), tmp_path), "NoSuchMetric")
+    with pytest.raises(pf.NoPlotData):
+        pf.build_ggplot(df, spec, style)
+
+    df = pf.faceted_data(_Exp(_summary(), tmp_path), "FinalPI")
+    hidden = pf.default_spec("faceted_pi")
+    hidden.treatments = {n: {"label": n, "show": False}
+                         for n in ("chr", "control")}
+    with pytest.raises(pf.NoPlotData, match="hidden"):
+        pf.build_ggplot(df, hidden, style)
+
+
 def test_render_all_writes_defaults_and_respects_specs_file(tmp_path):
     exp = _Exp(_summary(), tmp_path)
     written = pf.render_all(exp)
@@ -246,6 +291,45 @@ def test_editor_renders_preview_and_round_trips_controls(editor):
     assert spec.y_limits == [-0.8, 0.8]
 
 
+def test_editor_shows_why_there_is_nothing_to_plot(editor, tmp_path):
+    s = _summary()
+    s["Treatment"] = ""
+    editor._experiment = _Exp(s, tmp_path)
+    editor._data_cache.clear()
+    editor._load_controls()
+    editor._render_preview()
+    assert "experimental_factors" in editor.preview.text()
+
+
+def _saved_spec(tmp_path, plot_id="faceted_pi"):
+    return pf.load_project_specs(str(tmp_path)).plots[plot_id]
+
+
+def test_editor_edits_reach_plot_specs_without_a_save(editor, tmp_path):
+    """The Hub's project report reads plot_specs.yaml; a ticked checkbox in
+    an editor still open used to live only in memory until close."""
+    editor.pvalues_check.setChecked(True)
+    assert editor._save_timer.isActive()
+    editor._save_timer.timeout.emit()              # the debounce elapsing
+    assert _saved_spec(tmp_path).p_values is True
+
+
+def test_editor_saves_before_opening_another_project(editor, tmp_path,
+                                                     monkeypatch):
+    from pytrackinganalysis.apps import plot_editor
+
+    monkeypatch.setattr(plot_editor.QMessageBox, "critical",
+                        lambda *a, **k: None)
+    editor._save_timer.stop()
+    editor._updating = True                        # change without autosave
+    editor.pvalues_check.setChecked(True)
+    editor._updating = False
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    editor.open_project(str(other))                # fails to load, harmlessly
+    assert _saved_spec(tmp_path).p_values is True
+
+
 def test_editor_save_style_as_and_default_persist(editor, tmp_path, monkeypatch):
     from PyQt6.QtWidgets import QInputDialog
 
@@ -307,6 +391,44 @@ def test_pvalue_brackets_render_and_extend_ylim(tmp_path):
     # A formatted p-value label made it into the vector file as text.
     pvals = pf.facet_pvalues(pf.faceted_data(exp, "FinalPI"))
     assert any(f"{p:.2g}" in svg for p in pvals["p"])
+
+
+def test_single_treatment_pvalue_is_against_indifference(tmp_path):
+    """One shown treatment has no pair to bracket: PI is tested against 0
+    and Percentage against 0.5, the p-value printed alone above the group."""
+    from pytrackinganalysis import indifference
+
+    s = _summary()
+    s["Treatment"] = "chr"
+    s["FinalPI"] = np.linspace(0.3, 0.7, len(s))           # clear preference
+    exp = _Exp(s, tmp_path)
+    df = pf.faceted_data(exp, "FinalPI")
+    pvals = pf.facet_pvalues(df, "FinalPI")
+    assert list(pvals["Phase"]) == ["Acclimation", "Experiment", "Cooldown"]
+    assert pvals["b"].isna().all() and set(pvals["a"]) == {"chr"}
+    expected = indifference.one_sample(s["FinalPI"], "FinalPI")["p"]
+    assert pvals["p"].tolist() == pytest.approx([expected] * 3)
+    # Without a metric (or one with no null) there is nothing to test.
+    assert pf.facet_pvalues(df).empty
+    assert pf.facet_pvalues(pf.faceted_data(exp, "TotalDistancePerMin"),
+                            "TotalDistancePerMin").empty
+
+    # The figure carries the metric itself, so the checkbox alone is enough.
+    spec = pf.default_spec("faceted_pi")
+    spec.p_values = True
+    style = pf.PlotStyle()
+    g = pf.figure_for(exp, "faceted_pi", spec, style)
+    svg = open(pf.save_ggplot(g, str(tmp_path / "one.svg"), style),
+               encoding="utf-8").read()
+    assert f"p = {expected:.2g}" in svg        # no bracket, so it says "p ="
+
+    # Hiding one of two treatments leaves one shown: tested the same way.
+    two = pf.faceted_data(_Exp(_summary(), tmp_path), "FinalPercentage")
+    hidden = pf.default_spec("faceted_percentage")
+    hidden.p_values = True
+    hidden.treatments = {"chr": {"label": "chr", "show": True},
+                         "control": {"label": "control", "show": False}}
+    pf.build_ggplot(two, hidden, style)                      # renders
 
 
 def test_boxplot_and_boxed_strip_render(tmp_path):

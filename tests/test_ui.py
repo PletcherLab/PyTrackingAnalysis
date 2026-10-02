@@ -257,6 +257,51 @@ def test_a_colosseum_plate_laid_out_by_the_editor_is_all_positive(
     win.close()
 
 
+def _valence_editor_with_factors(tmp_path, factors, regions=None):
+    from pytrackinganalysis.apps.config_editor import ConfigEditorWindow
+    cfg = {"global": {"experiment_type": "Valence", "tracking_rig": "small_arena",
+                      "experimental_design_factors": factors},
+           "counting_regions": {"Light": {"alias": "L"}, "NoLight": {"alias": "N"}}}
+    if regions is not None:
+        cfg["tracking_regions"] = regions
+    path = tmp_path / "tracking_config.yaml"
+    path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+    return ConfigEditorWindow(str(path))
+
+
+def test_a_one_treatment_design_assigns_it_to_a_new_plate(qapp, tmp_path, dialogs):
+    """Genotype: [Chr] admits one treatment. A plate laid out blank left every
+    fly unassigned — dropped from stats, and the Plot Editor had nothing to
+    draw."""
+    win = _valence_editor_with_factors(tmp_path, {"Genotype": ["Chr"]})
+    regions = win._tracking_tab.dump()["tracking_regions"]
+    assert len(regions) == 6
+    assert {r["experimental_factors"] for r in regions.values()} == {"Chr"}
+    win.close()
+
+
+def test_a_design_with_a_choice_lays_out_a_blank_plate(qapp, tmp_path, dialogs):
+    # One single-level factor beside a two-level one: still blank, so an
+    # untouched well never becomes a half-assigned "Chr" arm.
+    win = _valence_editor_with_factors(
+        tmp_path, {"Genotype": ["Chr"], "Sex": ["M", "F"]})
+    regions = win._tracking_tab.dump()["tracking_regions"]
+    assert {r["experimental_factors"] for r in regions.values()} == {""}
+    win.close()
+
+
+def test_loaded_blank_regions_stay_blank(qapp, tmp_path, dialogs):
+    # A saved blank may be a deliberately empty well: only new rows prefill.
+    saved = {f"T_{i}": {"experimental_factors": "" if i == 0 else "Chr",
+                        "x_location_multiplier": 1, "y_location_multiplier": 1}
+             for i in range(6)}
+    win = _valence_editor_with_factors(tmp_path, {"Genotype": ["Chr"]}, saved)
+    regions = win._tracking_tab.dump()["tracking_regions"]
+    assert regions["T_0"]["experimental_factors"] == ""
+    assert regions["T_1"]["experimental_factors"] == "Chr"
+    win.close()
+
+
 def test_opening_a_valence_colosseum_project_lays_out_24_regions(qapp, tmp_path, dialogs):
     win = _valence_editor(qapp, tmp_path, "colosseum")
     assert win._tracking_tab.region_names() == [f"T_{i}" for i in range(24)]

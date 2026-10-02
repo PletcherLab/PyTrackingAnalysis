@@ -9,7 +9,7 @@ three-phase structure (acclimation / experiment / cooldown from cutoffs
 from __future__ import annotations
 
 from .. import Parameters, config_validation
-from .base import ExperimentType
+from .base import ExperimentType, sole_treatment
 
 # Default counting-region aliases for a fresh Valence project (editable later).
 _LIGHT_ALIAS = "Light, Left1, Left2, Left3, Right4, Right5, Right6"
@@ -260,7 +260,8 @@ class ValenceExperimentType(ExperimentType):
         Editor — and the 6-well Small Arena have no flips), the Light/NoLight
         counting regions, the chosen (or default) facets with their phase names
         (Acclimation/Experiment/Cooldown by default), and any design factors.
-        Region treatments are left blank for the user to assign.
+        Region treatments are left blank for the user to assign — except in a
+        design with only one possible treatment, which every region gets.
         """
         g: dict = {"experiment_type": self.name}
         if rig:
@@ -281,9 +282,11 @@ class ValenceExperimentType(ExperimentType):
             else _clean_number(self.default_min_movement)
 
         ## One source for the plate's geometry — the Config Editor lays out
-        ## the same wells the same way (``tracking_regions_for_rig``).
+        ## the same wells the same way (``tracking_regions_for_rig``). Blank
+        ## treatments, unless the design admits only one (sole_treatment).
+        treatment = ", ".join(sole_treatment(factors).values())
         tracking_regions = {
-            name: {"experimental_factors": "", **multipliers}
+            name: {"experimental_factors": treatment, **multipliers}
             for name, multipliers in
             (self.tracking_regions_for_rig(rig) or {}).items()
         }

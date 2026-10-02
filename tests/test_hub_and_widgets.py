@@ -630,6 +630,23 @@ def test_desktop_exec_quotes_paths_with_spaces():
     assert _exec_arg('/opt/a"b/pytrack-hub') == '"/opt/a\\"b/pytrack-hub"'
 
 
+def test_every_app_id_gets_a_desktop_entry():
+    """Each app registers its ID with the desktop portal; an ID with no
+    installed .desktop entry logs "App info not found" on every launch (the
+    Plot Editor was missing from the installer)."""
+    import re
+    from pathlib import Path
+
+    from pytrackinganalysis import install_desktop
+
+    apps = Path(install_desktop.__file__).parent / "apps"
+    ids = {m for path in apps.glob("*.py")
+           for m in re.findall(r'setDesktopFileName\("([^"]+)"\)',
+                               path.read_text(encoding="utf-8"))}
+    assert ids >= {"pytrack-hub", "pytrack-plots"}
+    assert ids <= {cmd for cmd, _name, _comment in install_desktop._APPS}
+
+
 def test_gui_environment_strips_ibus_module_overrides(monkeypatch):
     import os
 

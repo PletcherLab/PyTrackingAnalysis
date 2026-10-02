@@ -156,6 +156,59 @@ def test_comparison_rows_pooled_and_mixed(tmp_path):
     assert r["p_mixed"] is not None and r["p_mixed"] < 0.05
 
 
+def test_two_treatments_are_not_tested_against_indifference(tmp_path):
+    p = _make_project(tmp_path)
+    summary, facet, _, _ = p.combined_frames()
+    assert p.indifference_rows(summary, facet) == []
+    assert "Tests against indifference" not in p.stats_text(summary, facet)
+
+
+def _single_treatment_project(tmp_path):
+    p = _make_project(tmp_path,
+                      config_for=lambda _n: _exp_config(levels=("chr",)))
+    for i, name in enumerate(p.experiment_names):
+        analysis = tmp_path / name / "analysis"
+        s = _summary_frame(seed=i)
+        s["Treatment"] = "chr"
+        s["FinalPI"] = np.random.default_rng(i).normal(0.5, 0.15, len(s))
+        s.to_csv(analysis / "Rec_Summary.csv", index=False)
+        frames = []
+        for win in ["(0, 10)", "(10, 70)", "(70, inf)"]:
+            f = s.copy()
+            f["FacetRange"] = win
+            frames.append(f)
+        pd.concat(frames).to_csv(analysis / "Rec_Summary_Facet.csv", index=False)
+    return prj.Project(str(tmp_path))
+
+
+def test_single_treatment_is_tested_against_indifference(tmp_path):
+    from pytrackinganalysis.report import model as m
+
+    p = _single_treatment_project(tmp_path)
+    summary, facet, _, _ = p.combined_frames()
+    assert p.comparison_rows(summary, facet) == []      # no pair to compare
+    rows = p.indifference_rows(summary, facet)
+    # PI and Percentage per phase; movement has no natural null.
+    assert {r["metric"] for r in rows} == {"FinalPI", "FinalPercentage"}
+    assert len(rows) == 6
+    pi = [r for r in rows if r["metric"] == "FinalPI"][0]
+    assert pi["treatment"] == "chr" and pi["n"] == 24   # 12 per rep, pooled
+    assert pi["null"] == 0.0 and pi["p"] < 0.001 and pi["significant"]
+    # Two replicates: the mixed model's verdict rides beside the pooled one.
+    assert pi["p_mixed"] is not None and pi["p_mixed"] < 0.05
+    pct = [r for r in rows if r["metric"] == "FinalPercentage"][0]
+    assert pct["null"] == 0.5
+
+    text = p.stats_text(summary, facet)
+    assert "Tests against indifference" in text and "chr (n=24)" in text
+
+    model = p.build_report_model(include_ai_summary=False)
+    tables = {b.title: b for b in model.blocks if isinstance(b, m.Table)}
+    table = tables["Tests against indifference"]
+    assert "Pooled p" in table.columns and "Mixed p" in table.columns
+    assert len(table.rows) == 6
+
+
 def test_parse_window_handles_inf():
     assert prj.Project.parse_window("(10, 70)") == (10.0, 70.0)
     assert prj.Project.parse_window("(70, inf)") == (70.0, float("inf"))
@@ -289,6 +342,32 @@ def test_create_project_file_merges_and_preserves_unknown_keys(tmp_path):
     prj.create_project_file(str(tmp_path), "NewName", notes="")
     meta = yaml.safe_load((tmp_path / "project.yaml").read_text())
     assert "notes" not in meta
+
+
+def test_a_default_name_is_not_stored_so_a_copied_project_yaml_follows_its_folder(
+        tmp_path):
+    """A stored default pinned the name: project.yaml copied into a sibling
+    folder wrote that sibling's report as '<original>_report.pdf'."""
+    original, sibling = tmp_path / "LineA", tmp_path / "LineB"
+    original.mkdir()
+    sibling.mkdir()
+    prj.create_project_file(str(original), "LineA")       # typed == folder
+    meta = yaml.safe_load((original / "project.yaml").read_text())
+    assert "name" not in meta
+    (sibling / "project.yaml").write_text(
+        (original / "project.yaml").read_text(), encoding="utf-8")
+    for d in (original, sibling):
+        (d / "Rep1" / "data").mkdir(parents=True)
+        (d / "Rep1" / "data" / "Rec.xlsx").write_bytes(b"")
+        (d / "Rep1" / "tracking_config.yaml").write_text(
+            "global: {tracking_type: TRACKER}\ntracking_regions: {}\n")
+    assert prj.Project(str(sibling)).name == "LineB"
+
+    # A name that differs from the folder is a choice, and is kept — first.
+    prj.create_project_file(str(original), "Pretty name", notes="n")
+    text = (original / "project.yaml").read_text()
+    assert text.startswith("name: Pretty name")
+    assert prj.Project(str(original)).name == "Pretty name"
 
 
 def test_project_info_dialog_creates_and_edits(qapp, tmp_path):
