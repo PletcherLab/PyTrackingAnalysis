@@ -147,7 +147,7 @@ matplotlib (`plt.cm.get_cmap` removed ≥ 3.9).
 ### Which plots the *pipeline* auto-generates — `_TRACKING_TYPE_PLOTS`
 
 `Experiment.save_plots` only draws the plots registered for the type in
-[`_TRACKING_TYPE_PLOTS`](../pytrackinganalysis/Experiment.py#L31-L66):
+[`_TRACKING_TYPE_PLOTS`](../pytrackinganalysis/Experiment.py#L33-L68):
 
 | Type | Auto-generated facet plots |
 |---|---|
@@ -167,8 +167,12 @@ code because they fail to load (§5).
 ## 4. Statistics available to each type — `_TRACKING_TYPE_METRICS`
 
 `Experiment.stats()` runs `run_pairwise_comparisons_facet` for each metric in
-[`_TRACKING_TYPE_METRICS`](../pytrackinganalysis/Experiment.py#L69-L83) (2
-treatment levels → Welch's t-test; 3+ → Tukey HSD; <2 → "Not applicable"):
+[`_TRACKING_TYPE_METRICS`](../pytrackinganalysis/Experiment.py#L71-L85) (2
+treatment levels → Welch's t-test; 3+ → Tukey HSD; <2 → "Not applicable"). With
+exactly **one** treatment level, a metric with a natural indifference value is
+instead tested against it — `FinalPI` against 0 and `FinalPercentage` against
+0.5, two-sided one-sample t-test ([`indifference.py`](../pytrackinganalysis/indifference.py));
+every other metric stays "Not applicable":
 
 | Type | Compared metrics |
 |---|---|

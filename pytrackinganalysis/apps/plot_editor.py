@@ -189,7 +189,7 @@ class PlotEditorWindow(QMainWindow):
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(500)
-        self._save_timer.timeout.connect(self._persist_specs)
+        self._save_timer.timeout.connect(lambda: self._persist_specs(quiet=True))
 
         self._build_ui(initial_path)
         if initial_path:
@@ -637,9 +637,26 @@ class PlotEditorWindow(QMainWindow):
         finally:
             self._updating = False
 
-    def _persist_specs(self) -> None:
-        if self._project_dir:
+    def _persist_specs(self, quiet: bool = False) -> bool:
+        """Write plot_specs.yaml; False when it could not be written.
+
+        Never raises: an exception escaping a Qt slot aborts PyQt6, and the
+        autosave runs on every edit — a read-only share or a project folder
+        moved away must cost a message, not the editor. *quiet* (the
+        autosave) reports in the status bar; anything the user asked for
+        directly gets a dialog."""
+        if not self._project_dir:
+            return True
+        try:
             pf.save_project_specs(self._project_dir, self._specs)
+        except Exception as err:  # noqa: BLE001
+            message = f"Could not save {pf.SPECS_FILENAME}: {err}"
+            if quiet:
+                self.statusBar().showMessage(message)
+            else:
+                QMessageBox.warning(self, "Not saved", message)
+            return False
+        return True
 
     # --------------------------------------------------- controls <-> model
 
@@ -692,7 +709,12 @@ class PlotEditorWindow(QMainWindow):
 
     def _load_facet_table(self, spec: pf.PlotSpec) -> None:
         data = self._current_data()
-        phases = list(data["Phase"].cat.categories) if data is not None else []
+        ## The metric-missing frame has a plain Phase column; with no phases
+        ## to list, the preview's NoPlotData message explains the empty plot.
+        phases = (list(data["Phase"].cat.categories)
+                  if data is not None
+                  and data["Phase"].dtype.name == "category"
+                  else [])
         self.facet_table.setRowCount(0)
         included = spec.facets if spec.facets else phases
         for phase in phases:
@@ -937,6 +959,7 @@ class PlotEditorWindow(QMainWindow):
         self._reload_style_combo()
         self._load_controls()
         self._schedule_render()
+        self._schedule_save()
         self.statusBar().showMessage(
             f"{pf.PLOT_TYPES[self._plot_id]['display']} reset to defaults")
 

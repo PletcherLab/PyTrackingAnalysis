@@ -25,7 +25,7 @@ scripts: []
 experiment_scripts: []
 ```
 
-- **`name`** is the display name used in the Hub, combined outputs, and Project report.
+- **`name`** is optional: without it, the Project's name is its folder's name. It is the display name used in the Hub, combined output filenames (`analysis/<project>_Summary.csv` and the rest), and the Project report (`<project>_report.pdf`). It is written only when you give the Project a name that differs from its folder, so a `project.yaml` copied into another folder, or a renamed folder, takes the folder's name rather than carrying the old one into output filenames.
 - **`notes`** are optional and appear near the top of the Project report.
 - **`design.global`** is the shared global design: experiment type, design factors and levels, facets, phase names, and type-specific quality criteria.
 - **`design.counting_regions`** fixes the treatment-region names and their order. Aliases stay per replicate.
@@ -69,6 +69,6 @@ Region assignments, aliases, fly counts, and rigs may differ unless you explicit
 
 ## Creating replicate configs
 
-**Experiment configs...**, **Create experiment...** and **Initialize existing directory...** all scaffold `tracking_config.yaml` files from `project.yaml`. The scaffold matches the shared design by construction, but you still need to assign region treatments, check aliases, choose the rig when needed, and add the DTrack export under `data/`. When the Project already has a replicate, the scaffold is a copy of the *first* one, so its rig and treatments are that recording's, not this one's.
+**Experiment configs...**, **Create experiment...** and **Initialize existing directory...** all scaffold `tracking_config.yaml` files from `project.yaml`. The scaffold matches the shared design by construction, but you still need to assign region treatments, check aliases, choose the rig when needed, and add the DTrack export under `data/`. (When every design factor has a single level, the regions the Config Editor adds start assigned to that one treatment.) When the Project already has a replicate, the scaffold is a copy of the *first* one, so its rig and treatments are that recording's, not this one's.
 
 The same validation also runs **before** a config is brought in from outside. **Create experiment...** offers **Copy config from...**, and the chosen file is tested against `design:` exactly as a replicate is at load time. If it would fail, nothing is written and the scaffold stays — a non-conforming replicate would otherwise stop the whole Project from loading. In a legacy Project with no `design:` section, the incoming config is checked against the existing replicates instead. See **Creating experiments**.

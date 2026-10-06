@@ -20,6 +20,15 @@ combined publication figures, and no report above the single recording.
   silently become a Project) and an out-of-tree registry (the Project must
   travel with its data). Terminology shifts accordingly: the single-recording
   unit is now the *Experiment directory*.
+
+  **Amendment (2026-10): the name follows the folder.** `project.yaml` stores
+  `name:` only when it differs from the Project folder's own name; absent,
+  the Project is named after its folder. Writing the default pinned the name
+  at creation, so a `project.yaml` copied into a sibling folder (the natural
+  way to start the next line of a screen) wrote every sibling's report and
+  pooled CSVs under the original Project's name. A name typed differently in
+  Create/Edit Project is still stored — a copied *custom* name still travels,
+  which is the one case the marker cannot disambiguate.
 - **Hard design-match validation.** At Project load, every replicate must
   agree on `experiment_type` and on experimental-design factor names AND
   levels; a mismatch is a load error naming the offender (the ADR-0001
@@ -56,12 +65,31 @@ combined publication figures, and no report above the single recording.
   itself the finding. Pooled-only (pseudoreplication bait), mixed-only
   (fragile at 2 replicates, mismatched to the pooled dots), and
   experiment-means-as-n (discards fly-level information) were rejected.
+
+  **Amendment (2026-10): a single treatment is tested against
+  indifference.** With one treatment level there is no pair to compare, and
+  "Not applicable" left single-genotype screens with no inference at all. Yet
+  PI and Percentage carry a built-in null — 0 and 0.5 mean no preference
+  between the counting regions — so each phase's `FinalPI` / `FinalPercentage`
+  is tested against it with a two-sided one-sample t-test (the one-sample
+  counterpart of the Welch policy), at both levels: the experiment's
+  `*_Stats.txt` and report, and the Project's pooled test beside an
+  intercept-only mixed model (experiment random intercept) on the deviation
+  from the null — the same pooled + mixed pairing as above. Metrics with no
+  natural null (movement, transitions) stay "Not applicable". The test lives
+  in one module (`indifference.py`) so Stats.txt, both reports and the
+  publication figures' `p = …` label cannot disagree. A phase whose values
+  are all identical is reported as untestable rather than as p = 0. The
+  mixed-model p shares this section's caveat: with two or three replicates
+  its normal approximation is optimistic, so a disagreement with the pooled p
+  is the signal, not either number alone.
 - **The Project Report uses the publication renderer.** Pooled figures in
   `<project>_report.pdf` come from the plotnine Spec/Style system
   (`plot_specs.yaml` at the project root), so the report shows exactly what
   the paper will — a deliberate, contained exception to ADR-0004's
   "report stays matplotlib", which continues to hold for the per-experiment
-  report. Plus the pooled + mixed stats tables, a per-replicate health table,
+  report. Plus the pooled + mixed stats tables (Tests against Indifference
+  for a single treatment), a per-replicate health table,
   and an opt-in AI narrative through the existing `ai/` stack (summarizes the
   pipeline's numbers, never computes its own; failures never block the
   report).

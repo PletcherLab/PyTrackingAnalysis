@@ -30,7 +30,7 @@ Both labels run the same sequence: unload any currently loaded replicate, analyz
 
 Use the other Project actions around that full refresh:
 
-- **Plot editor...** - open the Project-level publication figure editor after a report refresh has created combined faceted data. Save plot specs, then click **Update report** to rebuild the PDF with those specs.
+- **Plot editor...** - open the Project-level publication figure editor after a report refresh has created combined faceted data. Edits are saved to `plot_specs.yaml` as you make them; click **Update report** to rebuild the PDF with them.
 - **AI narrative...** - write a Project AI narrative from the current Combined Analysis and rebuild the Project report so the narrative is embedded. The prose is also saved as `analysis/ai_narrative.md` for later searching.
 - **View reports** - open the Project report and every per-replicate report at once, each handed to your desktop's PDF viewer. Enabled only when both kinds exist; the tooltip says which half is missing when it does not.
 - **Removed regions...** - declare tracking regions to leave out of the analysis. See below.

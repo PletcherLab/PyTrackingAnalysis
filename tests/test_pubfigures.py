@@ -330,6 +330,21 @@ def test_editor_saves_before_opening_another_project(editor, tmp_path,
     assert _saved_spec(tmp_path).p_values is True
 
 
+def test_editor_autosave_failure_is_a_message_not_a_crash(editor, tmp_path):
+    # An exception escaping a Qt slot aborts PyQt6; a project folder that
+    # vanished must cost a status message, not the editor.
+    editor._project_dir = str(tmp_path / "gone" / "away")
+    editor.pvalues_check.setChecked(True)
+    editor._save_timer.timeout.emit()
+    assert "Could not save" in editor.statusBar().currentMessage()
+    editor._project_dir = str(tmp_path)
+
+
+def test_editor_restore_defaults_is_saved(editor, tmp_path):
+    editor._restore_defaults()
+    assert editor._save_timer.isActive()
+
+
 def test_editor_save_style_as_and_default_persist(editor, tmp_path, monkeypatch):
     from PyQt6.QtWidgets import QInputDialog
 
@@ -408,6 +423,12 @@ def test_single_treatment_pvalue_is_against_indifference(tmp_path):
     assert pvals["b"].isna().all() and set(pvals["a"]) == {"chr"}
     expected = indifference.one_sample(s["FinalPI"], "FinalPI")["p"]
     assert pvals["p"].tolist() == pytest.approx([expected] * 3)
+    # A spec entry the data no longer has (a renamed level) is not a second
+    # treatment: the single shown group is still tested.
+    stale = df.copy()
+    stale["Treatment"] = pd.Categorical(stale["Treatment"],
+                                        categories=["chr", "old_name"])
+    assert len(pf.facet_pvalues(stale, "FinalPI")) == 3
     # Without a metric (or one with no null) there is nothing to test.
     assert pf.facet_pvalues(df).empty
     assert pf.facet_pvalues(pf.faceted_data(exp, "TotalDistancePerMin"),

@@ -123,7 +123,9 @@ def create_project_file(project_dir, name: str | None = None,
     ## default pins the name at creation, so a project.yaml copied to a
     ## sibling (or a renamed folder) kept writing reports and summaries under
     ## the old Project's name. Absent, Project falls back to the directory.
-    folder = os.path.basename(os.path.normpath(str(project_dir)))
+    ## abspath, as Project's own fallback uses: "." or "../x" must compare
+    ## against the real folder name, not "." / "..".
+    folder = os.path.basename(os.path.abspath(str(project_dir)))
     chosen = name or payload.get("name") or folder
     payload.pop("name", None)
     if chosen != folder:

@@ -302,6 +302,7 @@ def test_single_treatment_stats_file_tests_against_indifference(capsys):
         _treatment_arms = Arena.__dict__["_treatment_arms"]
         _print_group_comparison = Arena.__dict__["_print_group_comparison"]
         _print_indifference_test = Arena.__dict__["_print_indifference_test"]
+        _has_indifference = Arena.__dict__["_has_indifference"]
         run_pairwise_comparisons_facet = Arena.run_pairwise_comparisons_facet
 
     arena = _StatsArena(_single_treatment_summary())
@@ -314,6 +315,29 @@ def test_single_treatment_stats_file_tests_against_indifference(capsys):
     # A metric with no null stays "not applicable" with one treatment.
     msg = arena.run_pairwise_comparisons_facet(metric="TotalDistancePerMin")
     assert msg.startswith("Not applicable")
+
+    # Too little data: the skip names its real cause, and the design is not
+    # blamed ("fewer than two treatment levels" is false here).
+    capsys.readouterr()
+    thin = _StatsArena(_single_treatment_summary().head(1))
+    assert thin.run_pairwise_comparisons_facet(metric="FinalPI") is None
+    out = capsys.readouterr().out
+    assert "too few numeric values" in out
+    assert "fewer than two treatment levels" not in out
+
+
+def test_missing_treatment_is_unassigned_not_a_second_arm():
+    """pandas 3 keeps None/NaN through astype(str): a region whose
+    experimental_factors is YAML null became a 'nan' arm in Stats.txt and
+    crashed the report's table."""
+    from pytrackinganalysis.Arena import Arena
+
+    s = _single_treatment_summary()
+    s["Treatment"] = s["Treatment"].astype(object)
+    s.loc[0, "Treatment"] = None
+    _kept, arms, unassigned = Arena._treatment_arms(s)
+    assert arms == ["chr"] and unassigned == 1
+    assert report_figures._treatments(s) == ["chr"]
 
 
 # --------------------------------------------------------------------------

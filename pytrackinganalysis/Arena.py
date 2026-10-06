@@ -1642,7 +1642,9 @@ class Arena:
         reports a nameless n=1 group as a result. One blank region in the config
         is enough to trigger it, so exclude and announce rather than analyse.
         """
-        labels = summary['Treatment'].astype(str).str.strip()
+        ## fillna first: under pandas 3 astype(str) keeps NaN/None as NaN,
+        ## which passes both filters below and became a second "arm".
+        labels = summary['Treatment'].fillna('').astype(str).str.strip()
         assigned = labels.ne('') & labels.str.lower().ne('nan')
         return summary[assigned], list(pd.unique(labels[assigned])), int((~assigned).sum())
 
@@ -1677,6 +1679,12 @@ class Arena:
         if dropped:
             print(f"  note: {dropped} tracker(s) excluded — no numeric {metric} in this window.")
         return True
+
+    @staticmethod
+    def _has_indifference(metric) -> bool:
+        """Whether *metric* has a no-preference value to test against."""
+        from . import indifference
+        return indifference.null_for(metric) is not None
 
     @staticmethod
     def _print_indifference_test(subset, metric, treatment, window_label):
@@ -1745,9 +1753,11 @@ class Arena:
 
         if(len(treatments)<2):
             ## One treatment: nothing to compare between, but PI/Percentage
-            ## can still be tested against indifference.
-            if len(treatments) == 1 and self._print_indifference_test(
-                    summary, metric, treatments[0], window_label):
+            ## can still be tested against indifference. Attempted means
+            ## applicable — a skip has already printed its real reason.
+            if len(treatments) == 1 and self._has_indifference(metric):
+                self._print_indifference_test(
+                    summary, metric, treatments[0], window_label)
                 return None
             msg = f"Not applicable: {metric} has fewer than two treatment levels."
             print(msg)
@@ -1797,10 +1807,11 @@ class Arena:
             treatments = list(pd.unique(subset['Treatment'].astype(str).str.strip()))
             window_label = f"({frange[0]:.2f} , {frange[1]:.2f})"
             if(len(treatments)<2):
-                if len(treatments) == 1 and self._print_indifference_test(
-                        subset, metric, treatments[0], window_label):
+                if len(treatments) == 1 and self._has_indifference(metric):
                     applicable = True
-                    tests_run += 1
+                    if self._print_indifference_test(
+                            subset, metric, treatments[0], window_label):
+                        tests_run += 1
                     print("\n")
                     continue
                 print(f"Not applicable for facet {frange}: fewer than two treatment levels.")

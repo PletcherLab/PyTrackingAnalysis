@@ -102,6 +102,7 @@ pytrack                        # Analysis Hub (default entry point)
 pytrack-hub                    # Analysis Hub (same as pytrack)
 pytrack-config                 # Config Editor
 pytrack-qc                     # QC Viewer
+pytrack-plots                  # Plot Editor (publication figures)
 
 # Or without activating, using uv run:
 uv run pytrack-hub
@@ -147,6 +148,7 @@ pytrack                        # Analysis Hub (default entry point)
 pytrack-hub                    # Analysis Hub (same as pytrack)
 pytrack-config                 # Config Editor
 pytrack-qc                     # QC Viewer
+pytrack-plots                  # Plot Editor (publication figures)
 
 # Without activating:
 uv run pytrack-hub
@@ -208,6 +210,7 @@ uv run pytrack-hub                   # works from any directory
 uv run pytrack-hub /path/to/Trial1   # open a specific project
 uv run pytrack-config                # Config Editor
 uv run pytrack-qc /path/to/Trial1    # QC Viewer
+uv run pytrack-plots /path/to/MyStudy  # Plot Editor (a Project)
 ```
 
 > **Headless / SSH note:** PyQt6 requires an X11 or Wayland display.  If running
@@ -280,7 +283,7 @@ replicates of one design (see `docs/adr/0005`):
 
 ```
 MyProject/
-├── project.yaml                 ← makes it a Project (name, notes, design, scripts)
+├── project.yaml                 ← makes it a Project (notes, design, scripts; name optional)
 ├── plot_specs.yaml              ← project-level publication figure specs
 ├── analysis/                    ← Combined Analysis (pooled CSVs + stats + AI narrative)
 ├── figures/                     ← project publication figures (SVG/PDF)
@@ -291,6 +294,12 @@ MyProject/
 │   └── Trial1_report.pdf
 └── Trial2/ ...
 ```
+
+A Project's **name is its folder's name** — `MyProject/` above writes
+`MyProject_report.pdf` and `analysis/MyProject_Summary.csv`. `project.yaml`
+stores a `name:` only when you type a different one in Create/Edit Project,
+so copying a `project.yaml` into another folder, or renaming the folder, never
+carries the old name into the new Project's output filenames.
 
 `project.yaml`'s **`design:` section is the authority** for everything the
 replicates share: the experiment type, design factors *and levels*, facet
@@ -312,7 +321,10 @@ data, and statistics: the Combined Analysis stacks each replicate's
 *filtered* summaries with an `Experiment` column, and its statistics show the
 pooled per-fly Welch/Tukey tests beside a **linear mixed model** (treatment
 fixed, experiment random intercept) that accounts for between-replicate
-variation. A parent folder from the retired batch-over-experiments mode
+variation. A single-treatment Project has no pair to compare, so its PI and
+Percentage are instead **tested against indifference** (0 and 0.5) — pooled,
+with a mixed-model companion when there are two or more replicates (§7).
+A parent folder from the retired batch-over-experiments mode
 becomes a Project by writing a `project.yaml`
 into it (the Hub's **Create project** button does exactly that).
 
@@ -391,6 +403,8 @@ For a type whose plate is fixed by the rig (like Valence), the Config Editor
 lays out the exact tracking regions when you choose the rig — 36 rows for Arena
 Max, 24 for Colosseum — and a typed config is checked to have exactly that set.
 You still assign each region's treatment; the region names and count are fixed.
+(When the design admits only one treatment, the plate is laid out already
+assigned to it — see §4.2.)
 
 Rules for a typed experiment:
 
@@ -445,7 +459,8 @@ replicate that already works (checked against the design before it is
 written). For Valence the Config Editor lays out the plate as soon as you pick
 the rig — 36 regions for Arena Max (with the first 18 X-flipped) or 24 for
 Colosseum, plus the Light/NoLight aliases. You then assign each region's
-treatment and drop the DTrack export into `data/`. You can also pick the
+treatment (already done for you when the design has only one — §4.2) and drop
+the DTrack export into `data/`. You can also pick the
 Experiment Type from the dropdown at the top of the Config Editor's **Global**
 tab. See `docs/adr/0001` and `0002`.
 
@@ -519,6 +534,14 @@ global:
 List every factor and its levels.  These are used for axis labels and plot titles.
 The actual assignment of factors to each physical tracking region is made in
 `tracking_regions` (see §4.4).
+
+When every factor has exactly **one** level (e.g. `genotype: [Chr]`), the
+design admits only one treatment, so **new** tracking regions start assigned
+to it — the plate laid out when you choose a typed experiment's rig, **Add
+region**, and **Generate N regions** in the Config Editor. Regions already
+saved are never changed: a saved blank region may be
+a deliberately empty well. With a choice anywhere (e.g. `genotype: [Chr]`
+plus `sex: [Male, Female]`) new regions stay blank for you to assign.
 
 ---
 
@@ -641,9 +664,12 @@ tracking_regions:
   *Treatment* label used in grouping, plots, and statistics.  For multi-factor
   designs list the levels comma-separated in the same order as
   `experimental_design_factors` (e.g. `Starved, Female`).  Regions sharing the
-  same string are analysed as one group.  A missing key means the region has
-  an empty treatment (it still loads, but groups as blank — the experiment
-  summary lists such regions as *(unassigned)*).
+  same string are analysed as one group.  A missing key or blank value means
+  the region is **unassigned**: it still loads (the experiment summary lists
+  it as *(unassigned)*), but its flies are left out of statistics and figures
+  — `*_Stats.txt` says how many — rather than grouped as a blank treatment.
+  If *every* region is unassigned there is nothing to compare or plot, and
+  the Plot Editor says so (§5.5).
 - `x_location_multiplier` / `y_location_multiplier` — correct for physical
   differences in camera orientation between regions.  Use `1` for no
   correction and `-1` to mirror an axis.  Only `1` and `-1` are meaningful:
@@ -773,8 +799,8 @@ python -m pytrackinganalysis plots /path/to/MyProject
 
 **Desktop launcher / taskbar icon (Linux).** The apps set their own window
 icon (a fly in a tracking reticle), but on Wayland/GNOME the *taskbar* icon
-comes from a `.desktop` entry. Install entries for the desktop apps once per
-environment with:
+comes from a `.desktop` entry. Install entries for all four desktop apps —
+Hub, Config Editor, QC Viewer and Plot Editor — once per environment with:
 
 ```bash
 uv run pytrack-install-desktop
@@ -782,6 +808,9 @@ uv run pytrack-install-desktop
 
 This also adds the apps to your desktop's application launcher. Re-run it if
 you move the project or recreate `.venv` (the entries embed absolute paths).
+Without the entries each app logs `Could not register app ID: App info not
+found for 'pytrack-…'` at startup; that message is harmless, and installing
+the entries silences it.
 
 All four apps persist the light/dark theme choice to
 `~/.config/pytrackinganalysis/ui.json`.  Recent projects — and the last-used
@@ -960,7 +989,9 @@ Structured editor for `tracking_config.yaml` with three tabs wrapped in a Card:
   experimental-design factors; optional facet cutoffs; text fields for each
   parameter override.
 - **Tracking regions** — one row per region.  **Generate N regions** bulk-fills
-  `T_0`…`T_(N-1)`.  X/Y multipliers are restricted to `1` / `-1`.
+  `T_0`…`T_(N-1)`.  X/Y multipliers are restricted to `1` / `-1`.  New rows
+  start blank, or already assigned when the design admits only one
+  treatment (§4.2).
 - **Counting regions** — treatment label → DTrack aliases.
 
 A **YAML preview** Card below the tabs renders the live serialization for
@@ -1036,8 +1067,24 @@ summarized, exclusion-filtered data.
   inclusion/order/renames, y-limits, reference line, independent per-facet
   y axes (`free_y`, the default for movement and transitions), and optional
   per-facet **p-value brackets** — Welch's t-test for two treatments, Tukey
-  HSD beyond, the same policy as Stats.txt). Both persist in
-  `<project>/plot_specs.yaml`, written only by this app.
+  HSD beyond, the same policy as Stats.txt. With exactly **one** treatment
+  shown there is no pair to bracket: the PI and Percentage plots instead print
+  **`p = …`** above the group in each facet, its test against indifference —
+  PI against 0, Percentage against 0.5 (§7). This goes by the treatments
+  *shown*, so hiding one arm of a two-arm experiment also gives the remaining
+  arm this label.) Both persist in `<project>/plot_specs.yaml`, written only
+  by this app.
+- **Edits save themselves.** `plot_specs.yaml` is rewritten about half a
+  second after every change, before another project is opened in the same
+  window, and on close — so the Hub's **Update report** and the
+  `render_publication_figures` step always see what is on screen, with no
+  save button to remember. If the file cannot be written (a read-only share,
+  a project folder moved away) the status bar says so.
+- **An empty preview says why.** When nothing can be drawn the preview pane
+  names the cause instead of a plotting error — most often *"No fly has a
+  treatment assigned"* (every region's `experimental_factors` is blank:
+  assign treatments in the Config Editor and re-run the analysis), or every
+  treatment hidden, no facet ticked, or no fly with a value for the metric.
 - **Save style as…** captures the current look under a name so subsequent
   plots come out identical; **Set as project default** makes it the style the
   app auto-loads for this project.
@@ -1091,7 +1138,8 @@ exp.qc(cutoff=0.9)       # cutoff = minimum fraction of valid frames per tracker
 # Save summary CSVs (flat + faceted) to analysis/
 exp.save_summary()
 
-# Run pairwise statistical comparisons and save results to analysis/
+# Run the statistics (pairwise comparisons, or tests against indifference
+# with a single treatment) and save results to analysis/
 exp.stats()
 
 # Save plots to analysis/ as PNG files
@@ -1165,7 +1213,8 @@ from pytrackinganalysis.project import Project, create_project_file
 
 # One-time: turn a directory of replicate experiment directories into a
 # Project by writing the project.yaml marker (idempotent; preserves keys).
-create_project_file("./MyStudy/", name="MyStudy")
+# The Project is named after its folder; pass name= only to choose another.
+create_project_file("./MyStudy/")
 
 prj = Project("./MyStudy/")        # discovers replicates, validates the design
 print(prj.experiment_names)        # the replicate directories
@@ -1175,7 +1224,7 @@ prj.run_all()                      # run_analysis + report in every replicate
 prj.build_combined_analysis()      # pooled CSVs + pooled/mixed stats → <project>/analysis/
 prj.render_figures(formats=("svg",))   # publication figures from plot_specs.yaml
 prj.generate_ai_summary("anthropic")   # optional AI narrative (embedded below)
-prj.create_report()                # <project>/<name>_report.pdf
+prj.create_report()                # <project>/<project>_report.pdf
 ```
 
 `Project(...)` raises with a per-replicate problem list when a replicate does
@@ -1218,11 +1267,11 @@ outputs to the Project root — see the last table below).
 | `*_Summary.csv` | Per-tracker summary statistics (one row per tracker). For Valence, a `LowMovementFlag` column marks flies flagged by the low-movement check (they remain in the data) |
 | `*_Summary_Facet.csv` | Same, split into the time phases defined by `facet_cutoffs` |
 | `*_Excluded.csv` | Every fly left out of the analysis — name, region, treatment, transition count in the primary phase (Valence), and a `Reason`: your own removal (`Removed: dead at ~20 min`), the low-transition criterion, or both on one row. Written even when no fly was excluded, so absence never needs interpreting |
-| `*_Stats.txt` | Pairwise statistical comparisons across treatment groups: independent two-sample **Welch's** t-test (unequal variance) when there are exactly two treatment levels, Tukey HSD when there are three or more. Each line carries both groups' N, mean and SD, and any trackers dropped for having no numeric value in the window are counted explicitly. Faceted runs append a note stating how many uncorrected tests were run and the Bonferroni-adjusted threshold. Pass `equal_var=True` to `run_pairwise_comparisons` for the classic Student's test. |
+| `*_Stats.txt` | Pairwise statistical comparisons across treatment groups: independent two-sample **Welch's** t-test (unequal variance) when there are exactly two treatment levels, Tukey HSD when there are three or more. Each line carries both groups' N, mean and SD, and any trackers dropped for having no numeric value in the window are counted explicitly. Faceted runs append a note stating how many uncorrected tests were run and the Bonferroni-adjusted threshold. Pass `equal_var=True` to `run_pairwise_comparisons` for the classic Student's test. With a **single treatment level** there is no pair to compare, so `FinalPI` and `FinalPercentage` are each **tested against indifference** — PI against 0, Percentage against 0.5 (50%) — with a two-sided one-sample t-test per phase ("Test against indifference" blocks); other metrics stay *Not applicable*. A phase whose values are all identical has no spread to test, and the file says so. |
 | `*_plot_*.png` | One PNG per plot type, named after the plot method |
 | `*_AI_Summary.txt` | (Optional) The saved AI Summary; provenance (provider, model, date) on the first line. The report embeds it while this file exists; **every `run_analysis()` deletes it** so it can never describe a stale run |
 | `ai_narrative.md` | (Optional) The same AI Summary as Markdown, under a fixed, name-independent filename so `**/ai_narrative.md` finds every narrative in a tree. Written and deleted with its `.txt` sibling |
-| `<name>_report.pdf` | **Written to the experiment directory root** (beside `tracking_config.yaml`), named and titled after that directory. Multi-page PDF: cover with status lines → notes and AI Summary (when present) → analysis figures (per-phase when faceted) → statistical-comparisons table → structured experiment summary → QC figures (data quality plus per-tracker transitions/min and movement bars) |
+| `<name>_report.pdf` | **Written to the experiment directory root** (beside `tracking_config.yaml`), named and titled after that directory. Multi-page PDF: cover with status lines → notes and AI Summary (when present) → analysis figures (per-phase when faceted) → statistical-comparisons table (or, with a single treatment, the **Tests against indifference** table) → structured experiment summary → QC figures (data quality plus per-tracker transitions/min and movement bars) |
 
 The experiment directory root also holds two **inputs** you may edit by hand:
 `tracking_config.yaml` (the design) and, when you have declared any,
@@ -1237,16 +1286,19 @@ regenerated by a run.
 
 ### Project outputs (Projects only — at the Project root)
 
+`<project>` below is the Project's folder name, unless `project.yaml` sets a
+different `name:` (§3).
+
 | File | Contents |
 |------|----------|
 | `analysis/<project>_Summary.csv` / `_Summary_Facet.csv` | The Combined Analysis: each replicate's *filtered* summaries stacked with an `Experiment` first column |
 | `analysis/<project>_Excluded.csv` | All replicates' excluded flies, tagged by replicate |
-| `analysis/<project>_Stats.txt` | Pooled per-fly Welch/Tukey tests beside the mixed-model p-values (treatment fixed, experiment random intercept), plus any cross-replicate warnings |
+| `analysis/<project>_Stats.txt` | Pooled per-fly Welch/Tukey tests beside the mixed-model p-values (treatment fixed, experiment random intercept), plus any cross-replicate warnings. A single-treatment Project gets a **Tests against indifference** section instead: PI against 0 and Percentage against 0.5, pooled one-sample t-test beside an intercept-only mixed model (experiment random intercept; needs two or more replicates, else `—`) |
 | `analysis/<project>_AI_Summary.txt` | (Optional) The AI narrative; deleted by every `build_combined_analysis()` and recreated by **AI narrative…** |
 | `analysis/ai_narrative.md` | (Optional) The same narrative as Markdown, with front matter naming the level, model, and replicates. A fixed filename, so `**/ai_narrative.md` finds every narrative in a tree; written and deleted with its `.txt` sibling |
-| `plot_specs.yaml` | Publication-figure Plot Specs + Plot Styles (written by the Plot Editor) |
+| `plot_specs.yaml` | Publication-figure Plot Specs + Plot Styles (written by the Plot Editor, which saves every edit within about half a second) |
 | `figures/*.svg` / `*.pdf` | Vector publication figures rendered from the pooled data |
-| `<project>_report.pdf` | The Project Report: cover with per-replicate status → AI narrative (when present) → pooled publication figures → pooled + mixed statistics table → per-replicate summary table |
+| `<project>_report.pdf` | The Project Report: cover with per-replicate status → AI narrative (when present) → pooled publication figures → pooled + mixed statistics table (single treatment: the **Tests against indifference** table) → per-replicate summary table |
 
 ---
 
@@ -1296,8 +1348,10 @@ the Project report.
 The remaining Project actions build on that refresh:
 
 1. **Plot editor…** — curate the pooled publication figures (§5.5) from the
-   Combined Analysis created by the report refresh.  Save plot specs, then run
-   **Update report** to rebuild the PDF with those specs.
+   Combined Analysis created by the report refresh.  Edits save themselves
+   to `plot_specs.yaml`; run **Update report** to rebuild the PDF with them.
+   (Only the Project report uses these figures — each replicate's own report
+   keeps its standard analysis plots.)
 2. **AI narrative…** — optional AI-written narrative for the Project Report
    (same rules as the per-experiment AI Summary: key-gated, clearly labeled,
    deleted by the next combined-analysis build).  It rebuilds the Project

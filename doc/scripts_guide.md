@@ -170,7 +170,7 @@ order you use them in.)
 |--------|-----|------------|--------------|
 | **Run Full Analysis** | `run_analysis` | `facet`, `cutoffs` | The complete pipeline: experiment summary → QC → summary CSVs → statistics → plots. Mirrors the Hub's Run Analysis button. |
 | **Summarize** | `summarize` | `facet`, `cutoffs` | Writes `{exp}_Summary.csv` and, when faceted, `{exp}_Summary_Facet.csv`. |
-| **Run pairwise comparisons** | `run_pairwise_comparisons` | `facet`, `cutoffs` | Treatment-vs-treatment statistics for every metric relevant to the tracking type. Faceted runs write `{exp}_Stats.txt`; flat runs write `{exp}_Stats_flat.txt`. |
+| **Run pairwise comparisons** | `run_pairwise_comparisons` | `facet`, `cutoffs` | Treatment-vs-treatment statistics for every metric relevant to the tracking type — or, with a single treatment level, PI and Percentage tested against indifference (0 / 0.5). Faceted runs write `{exp}_Stats.txt`; flat runs write `{exp}_Stats_flat.txt`. |
 | **Create PDF Report** | `create_report` | — | Builds `{exp}_report.pdf` with QC tables, tracker grids, and plots. |
 
 ### Plots
@@ -268,7 +268,7 @@ exactly one place, the `run_in_experiments` bridge.
 |--------|------------|--------------|
 | `validate_design` | — | Re-checks every replicate against the project design; fails the script on any mismatch. A cheap guard for the top of a pipeline. |
 | `run_in_experiments` | `script` (name), `only` (replicate names; blank = all) | Runs a named **Experiment Script** in every replicate — or just the ones named in `only` (see below). |
-| `render_publication_figures` | `format` (`svg` / `pdf` / `both`, default `svg`) | Writes the pooled publication figures to `figures/` from `plot_specs.yaml` — the Plot Editor's saves, headless. Skips itself when the project has no `plot_specs.yaml`. |
+| `render_publication_figures` | `format` (`svg` / `pdf` / `both`, default `svg`) | Writes the pooled publication figures to `figures/` from `plot_specs.yaml` — the Plot Editor's settings (saved as you edit), headless. Skips itself when the project has no `plot_specs.yaml`. |
 | `project_report` | `reports` (per-replicate reports, default on), `skip_analyzed` (default off) | **The whole Create-report button in one step**: analyzes every replicate (with its own report), pools the results into `analysis/`, then builds `<project>_report.pdf`. Nothing needs to run before it. Leave `skip_analyzed` off to match the button, which always re-analyzes; note that a replicate whose removed regions have not reached its saved analysis is re-run even when it *is* on. |
 | `generate_ai_narrative` | `provider` (`anthropic` / `openai`), `soft_fail` (default on) | Asks an AI provider to write the project narrative from the Combined Analysis. **Soft-fails by default** — a provider error is logged and the script continues. |
 

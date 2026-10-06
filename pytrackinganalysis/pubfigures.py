@@ -254,8 +254,15 @@ def save_project_specs(project_dir: str, specs: ProjectSpecs) -> str:
         "plots": {k: v.to_dict() for k, v in specs.plots.items()},
     }
     path = specs_path(project_dir)
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(payload, f, sort_keys=False, allow_unicode=True)
+    ## Never recreate a project folder that was moved or deleted while the
+    ## editor had it open (atomic_write_text would mkdir a ghost of it).
+    if not os.path.isdir(project_dir):
+        raise FileNotFoundError(f"project folder no longer exists: {project_dir}")
+    ## Atomic: the Plot Editor autosaves while the Hub's report may be
+    ## reading this file, and a truncate-then-write could be read half done.
+    from .io_utils import atomic_write_text
+    atomic_write_text(path, lambda f: yaml.safe_dump(
+        payload, f, sort_keys=False, allow_unicode=True))
     return path
 
 
@@ -633,7 +640,11 @@ def facet_pvalues(data: pd.DataFrame, metric: str | None = None) -> pd.DataFrame
     rows: list = []
     for phase in _levels(data["Phase"]):
         sub = data[data["Phase"] == phase]
-        levels = _levels(sub["Treatment"])
+        ## Levels with flies in this phase — not every category: a spec can
+        ## keep a shown treatment the data no longer has (a renamed level),
+        ## and counting it hid the single-treatment test.
+        levels = [t for t in _levels(sub["Treatment"])
+                  if (sub["Treatment"] == t).any()]
         if len(levels) == 1:
             result = (indifference.one_sample(sub["Value"], metric)
                       if metric else None)

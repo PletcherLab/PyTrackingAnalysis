@@ -42,7 +42,10 @@ holding a `tracking_config.yaml` are its Experiments — replicates of one
 design. The `project.yaml`'s `design:` section is the **authority** for the
 shared parameters (experiment type, factors and levels, facets, quality
 criteria, counting-region names); a Project owns the Combined Analysis, the
-project-level `plot_specs.yaml`/`figures/`, and the Project Report.
+project-level `plot_specs.yaml`/`figures/`, and the Project Report. Its name
+is its folder's name — `project.yaml` stores a `name:` only when one was
+chosen that differs — so a copied `project.yaml` or a renamed folder never
+carries a stale name into output filenames.
 _Avoid_: batch parent, parent directory
 
 **Experiment Directory**:
@@ -101,12 +104,23 @@ summaries (exclusions and flags already applied) with an `Experiment` column:
 combined summary CSVs, aggregated exclusions, and statistics — pooled
 per-fly tests (Welch/Tukey, matching the plots) beside a linear mixed model
 (treatment fixed, experiment random) that accounts for between-replicate
-variation.
+variation — or, for a single treatment, a Test against Indifference with the
+same pooled + mixed pairing.
+
+**Test against Indifference**:
+What a single-treatment experiment gets instead of a between-treatment
+comparison: each phase's `FinalPI` tested against 0 and `FinalPercentage`
+against 0.5 — the values meaning "no preference between the counting
+regions" — with a two-sided one-sample t-test. Reported in `*_Stats.txt`, the
+experiment and Project reports, and (one shown treatment, p-value option on)
+as `p = …` on the publication figures. Metrics without such a value
+(movement, transitions) have none.
+_Avoid_: one-sample comparison, vs-zero test
 
 **Project Report**:
 `<project>/<project>_report.pdf`: pooled publication figures rendered by the
 same Plot Spec/Style system the Plot Editor saves, the pooled + mixed
-statistics tables, a per-replicate summary table, a table naming every
+statistics tables (Tests against Indifference for a single treatment), a per-replicate summary table, a table naming every
 Excluded Fly across the Project with its reason, and an opt-in AI-written
 narrative (same rule as AI Summary: it summarizes, never analyzes).
 
@@ -359,7 +373,7 @@ _Avoid_: theme (a plotnine theme is one field inside a style)
 
 **Plot Spec**:
 One Publication Figure's content decisions — axis labels, facet and treatment
-inclusion/order/display names, y-limits, reference line — plus the name of
+inclusion/order/display names, y-limits, reference line, p-values — plus the name of
 the Plot Style it uses. Stored in `plot_specs.yaml` under `plots:`, keyed by
 plot id (e.g. `faceted_pi`).
 _Avoid_: plot config, settings
@@ -368,5 +382,7 @@ _Avoid_: plot config, settings
 The fourth PyQt6 app (`pytrack-plots`), a **Project-level** tool: opens a
 Project, renders a live preview of the pooled figures from the same
 Spec+Style that saving uses, and writes the vector Publication Figures.
+Every edit reaches `plot_specs.yaml` within about half a second, so what the
+Project Report renders is always what the editor shows.
 Presentation only — it never alters `tracking_config.yaml`; opening a
 replicate redirects up to its Project.

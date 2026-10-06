@@ -28,7 +28,7 @@ Some Experiment Types constrain the allowed rigs. Valence accepts Arena Max (36 
 
 ## Experimental design factors
 
-Define factor names and levels, such as `Genotype: CS, Mutant`. Tracking-region rows then choose one level for each factor.
+Define factor names and levels, such as `Genotype: CS, Mutant`. Tracking-region rows then choose one level for each factor. When every factor has a single level (`Genotype: Chr`), the design admits only one treatment, and new tracking-region rows start assigned to it.
 
 In a Project, these factors must match the shared design in `project.yaml`. The replicate config carries the matching values so a single Experiment can still load on its own.
 

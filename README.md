@@ -3,7 +3,8 @@
 A Python pipeline and desktop UI for analysing insect-tracking data exported
 from DTrack. Describe each recording in `tracking_config.yaml`, group
 replicate recordings with a Project-level `project.yaml`, and the pipeline
-produces summary CSVs, pairwise statistics, publication-quality plots, and
+produces summary CSVs, statistics (pairwise between treatments, or tests
+against indifference for a single treatment), publication-quality plots, and
 PDF reports.
 
 ## What's included
@@ -54,7 +55,8 @@ uv sync
 `uv sync` creates the virtual environment and installs everything, including
 the `pytrack*` commands below.
 
-On Linux, optionally install launcher/taskbar entries for the apps:
+On Linux, optionally install launcher/taskbar entries for all four apps
+(Hub, Config Editor, QC Viewer, Plot Editor):
 
 ```bash
 uv run pytrack-install-desktop
@@ -69,6 +71,7 @@ uv run pytrack                        # Analysis Hub
 uv run pytrack /path/to/MyProject     # Hub with a Project pre-loaded
 uv run pytrack-config                 # Config Editor
 uv run pytrack-qc /path/to/MyExperiment
+uv run pytrack-plots /path/to/MyProject   # Plot Editor (publication figures)
 ```
 
 An *experiment directory* holds a `tracking_config.yaml` plus a `data/`

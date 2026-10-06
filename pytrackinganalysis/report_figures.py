@@ -102,13 +102,16 @@ def _fig_to_block(fig, title=None, caption=None) -> m.Figure:
 
 
 def _treatments(summary: pd.DataFrame) -> list[str]:
-    """Ordered, non-blank treatment levels present in the summary."""
+    """Ordered, non-blank treatment levels present in the summary — the same
+    rule as ``Arena._treatment_arms``, so the report and Stats.txt agree on
+    how many arms an experiment has."""
     if "Treatment" not in summary.columns:
         return []
     seen: list[str] = []
-    for value in summary["Treatment"].astype(str):
+    ## fillna: under pandas 3 astype(str) keeps NaN/None as a float NaN.
+    for value in summary["Treatment"].fillna("").astype(str):
         v = value.strip()
-        if v and v not in seen:
+        if v and v.lower() != "nan" and v not in seen:
             seen.append(v)
     return seen
 

@@ -363,6 +363,16 @@ def test_a_default_name_is_not_stored_so_a_copied_project_yaml_follows_its_folde
             "global: {tracking_type: TRACKER}\ntracking_regions: {}\n")
     assert prj.Project(str(sibling)).name == "LineB"
 
+    # "." names the folder it stands for, not ".".
+    import os
+    cwd = os.getcwd()
+    try:
+        os.chdir(sibling)
+        prj.create_project_file(".", "LineB")
+    finally:
+        os.chdir(cwd)
+    assert "name" not in yaml.safe_load((sibling / "project.yaml").read_text())
+
     # A name that differs from the folder is a choice, and is kept — first.
     prj.create_project_file(str(original), "Pretty name", notes="n")
     text = (original / "project.yaml").read_text()

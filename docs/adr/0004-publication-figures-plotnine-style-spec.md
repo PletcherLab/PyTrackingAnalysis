@@ -24,8 +24,11 @@ edits (one flat config vs a reusable-look layer), and where that state lives.
 - **Two-layer model: Plot Style + Plot Spec.** A named Style holds everything
   that must look identical across figures (size, theme, fonts, point/mean
   styling, treatment→color mapping); a per-plot Spec holds content decisions
-  (labels, facet/treatment inclusion and order, y-limits, reference line) plus
-  its Style's name. "Save style as…" captures the current look;
+  (labels, facet/treatment inclusion and order, y-limits, reference line,
+  per-facet p-values) plus its Style's name. P-values follow the statistics
+  policy — Welch/Tukey brackets between shown treatments, and for a single
+  shown treatment a `p = …` label for its test against indifference
+  (ADR-0005 amendment 2026-10). "Save style as…" captures the current look;
   `default_style` names the one the editor auto-loads. A flat per-plot config
   with copy-from was rejected: nothing would enforce consistency after the
   copy, and no single artifact would *be* the project's look.
@@ -34,6 +37,14 @@ edits (one flat config vs a reusable-look layer), and where that state lives.
   Keeping it out of `tracking_config.yaml` preserves ADR-0001's line — the
   config defines the experiment; styling is presentation — and spares the
   Config Editor from round-tripping a section it doesn't understand.
+
+  **Amendment (2026-10): the editor saves as you edit.** Saving only on
+  Save/close made the file lag the screen while the Hub's Project Report and
+  `render_publication_figures` — other processes — read it, so a ticked
+  option silently missed the report. Every edit now reaches the file within
+  about half a second (and before another project is opened), written
+  atomically so a concurrent reader never sees half a file; a failed write is
+  a status-bar message, not a crash.
 - **Vector output is SVG with `svg.fonttype='none'`** (labels stay live text
   in Illustrator), with PDF as a secondary option; default face Arial with
   fallbacks. Outlined-text SVG was rejected because relabeling in Illustrator

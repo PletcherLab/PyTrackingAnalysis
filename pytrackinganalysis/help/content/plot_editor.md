@@ -6,9 +6,11 @@ The Plot Editor (`pytrack-plots`) creates Project-level publication figures from
 
 Run **Create report** or **Update report** first. The Plot Editor needs the Project's combined faceted summary data, and the report refresh creates it. If you open a replicate inside a Project, the app redirects to the Project root. A standalone experiment is refused with guidance to create a Project around it first.
 
+When nothing can be drawn, the preview says why instead of showing an error. The usual cause is that no fly has a treatment assigned: every tracking region's `experimental_factors` is blank. Assign treatments on the Config Editor's **Tracking regions** tab, then re-run the analysis. The other messages are no fly having a value for the metric, every treatment hidden (tick one under **Treatments**), or none of the plot's facets in the data (tick one under **Facets**).
+
 ## What it edits
 
-- **`plot_specs.yaml`** stores Plot Specs and Plot Styles.
+- **`plot_specs.yaml`** stores Plot Specs and Plot Styles. It is saved automatically about half a second after every edit, before another Project is opened in the same window, and on close, so the Hub's report and **Render publication figures** always see your latest edits. If the file cannot be written (a read-only folder, a Project moved away), the status bar says so.
 - **`figures/*.svg`** and **`figures/*.pdf`** are saved publication outputs.
 
 SVG text stays editable in Illustrator. PDF output embeds fonts.
@@ -36,7 +38,7 @@ SVG text stays editable in Illustrator. PDF output embeds fonts.
 ## Project-specific options
 
 - **Mark experiments** gives each replicate its own point shape and legend.
-- **P-value brackets** use the same treatment-comparison policy as the statistics output: Welch's t-test for two treatments and Tukey HSD for more.
+- **P-value brackets** use the same treatment-comparison policy as the statistics output: Welch's t-test for two treatments and Tukey HSD for more. With only one treatment shown, PI and Percentage plots print `p = <value>` above each facet's group instead of a bracket - the test against indifference (PI 0, Percentage 50%); movement and transitions plots get no label. What counts is the treatments shown in the figure, so hiding one arm of a two-arm experiment leaves one.
 - **Free y** is useful for movement and transitions, where each phase may need its own scale.
 
 ## Headless rendering
@@ -51,4 +53,4 @@ The Project Script action is **Render publication figures**.
 
 ## Batch runs
 
-Saving here is how a Project opts into figures during unattended runs: each project's **`batch`** script (the default script of a Batch Run) renders a Project's publication figures only when its `plot_specs.yaml` exists. A Project you never curated skips that step rather than inventing default-spec figures. See the **Batch runs** help topic.
+Opening a Project here is how it opts into figures during unattended runs: each project's **`batch`** script (the default script of a Batch Run) renders a Project's publication figures only when its `plot_specs.yaml` exists, and the Plot Editor writes that file after any edit and again when it closes. A Project you never opened here skips that step rather than inventing default-spec figures. See the **Batch runs** help topic.

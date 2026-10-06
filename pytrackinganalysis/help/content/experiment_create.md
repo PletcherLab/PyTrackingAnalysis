@@ -17,9 +17,9 @@ You can also **double-click a replicate row** to load it. A row marked **Config:
 The scaffolded `tracking_config.yaml` is design-conformant by construction, but it is a **starting point, not a finished config**:
 
 - When the Project already has at least one replicate, the scaffold is a copy of the **first replicate's** config - including its rig and its region treatments, which almost certainly are not the ones for this recording.
-- When this is the first replicate, the config is built from `project.yaml`'s design and the experiment type's defaults, with the **rig and every region treatment left blank**.
+- When this is the first replicate, the config is built from `project.yaml`'s design and the experiment type's defaults, with the **rig left blank and no tracking regions yet** - they appear when you choose the rig in the Config Editor (or use **Generate N regions** for a Custom layout).
 
-Either way you still have to choose the rig, assign every tracking region to its design-factor levels, check the counting-region aliases, and put the DTrack export under `data/`.
+Either way you still have to choose the rig, assign every tracking region to its design-factor levels, check the counting-region aliases, and put the DTrack export under `data/`. The exception is a design that admits only one treatment - every factor has a single level, such as `Genotype: [Chr]` - where the regions the Config Editor adds start assigned to it.
 
 ## Finishing a new replicate's config
 
