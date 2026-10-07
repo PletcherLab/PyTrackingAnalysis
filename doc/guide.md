@@ -1049,10 +1049,16 @@ matplotlib's cache is now cleared automatically every time the Hub closes.
 Structured editor for `tracking_config.yaml` with three tabs wrapped in a Card:
 
 - **Global** — drop-downs for `tracking_type` and `tracking_rig`; a table for
-  experimental-design factors; optional facet cutoffs; text fields for each
-  parameter override.
-- **Tracking regions** — one row per region.  **Generate N regions** bulk-fills
-  `T_0`…`T_(N-1)`.  X/Y multipliers are restricted to `1` / `-1`.  New rows
+  experimental-design factors; optional facet cutoffs; the type's quality
+  criteria (`min_transitions`, `min_movement`, `min_valid_fraction`); text
+  fields for each parameter override; and, for a pairwise tracking type, a
+  **Pairwise analysis** section with every setting of §4.1.1 (a counter shows
+  only the distances it uses). Blank fields take the default the placeholder
+  states.
+- **Tracking regions** — one row per region.  **From data** takes the regions
+  from the recording's ROI sheet (keeping existing treatments); an empty table
+  is filled that way on open when the rig does not fix the plate.
+  **Generate N regions** bulk-fills `T_0`…`T_(N-1)`.  X/Y multipliers are restricted to `1` / `-1`.  New rows
   start blank, or already assigned when the design admits only one
   treatment (§4.2).
 - **Counting regions** — treatment label → DTrack aliases.

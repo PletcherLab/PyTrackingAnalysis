@@ -10,6 +10,7 @@ For each row:
 
 - Pick one level for every design factor from the **Global** tab. A region left blank is unassigned: its flies are left out of statistics and figures, with a warning, rather than grouped as a blank treatment.
 - Set **X multiplier** and **Y multiplier** to `1` or `-1` when a mirrored arena needs its coordinates flipped.
+- Use **From data** to take the regions from the recording itself — the tracking regions in the DTrack export's ROI sheet (`data/*.xlsx`). Regions already in the table keep their treatments; any the recording lacks are removed only after you confirm. A config with no regions yet is filled this way when you open it, for any type whose rig does not fix the plate (Custom, Paired Open Field).
 - Use **Generate N regions** for Custom layouts, or let a typed rig such as Valence on Arena Max, Colosseum, or Small Arena lay out the required plate. Arena Max is always 36 wells (`T_0`..`T_35`); the Colosseum is run at either 24 (`T_0`..`T_23`) or 18 (`T_0`..`T_17`), and both validate — a config laid out from scratch gets 24; to run 18, remove the last six rows. The Small Arena is 6 wells (`T_0`..`T_5`). An existing plate of a valid size is left alone.
 
 ## Plate geometry on a typed rig

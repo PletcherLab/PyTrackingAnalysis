@@ -69,6 +69,40 @@ RIG_MM_PER_PIXEL: dict[str, float | None] = {
 #: characters; the placeholders ("required for 'movie' rig") set the floor.
 _OVERRIDE_FIELD_WIDTH = 200
 
+#: What each pairwise tracking type measures. A tracker follows identified
+#: flies, so it has Encounters and the open-field measures; a counter has no
+#: fly identity between frames — only the pair's distance (ADR-0014, -0015).
+_PAIRWISE_MODES = {
+    "PAIRWISEINTERACTIONTRACKER": "tracker",
+    "PAIRWISEINTERACTIONCOUNTER": "counter",
+}
+
+#: The pairwise settings beside ``interaction_distances``: ``(yaml key,
+#: rule, a counter uses it too)``. A ``nonneg`` setting switches off at 0.
+_PAIRWISE_SETTINGS = (
+    ("merge_distance_mm", "nonneg", True),
+    ("encounter_hysteresis_mm", "nonneg", False),
+    ("encounter_gap_s", "nonneg", False),
+    ("encounter_min_s", "nonneg", False),
+    ("wall_zone_mm", "positive", False),
+    ("fly_length_mm", "positive", False),
+    ("fly_width_mm", "positive", False),
+)
+_OPEN_FIELD_KEYS = ("wall_zone_mm", "fly_length_mm", "fly_width_mm")
+
+
+def _clean_number(value):
+    """Whole numbers as ints (8.0 -> 8). Interaction distances name summary
+    columns (``PercentInteracting_8``): a replicate saved as ``8.0`` would
+    produce ``PercentInteracting_8.0`` and stop lining up with its Project."""
+    value = float(value)
+    return int(value) if value == int(value) else value
+
+
+def _number_list(text: str) -> list:
+    """A comma-separated list of numbers, whole ones as ints. Raises ValueError."""
+    return [_clean_number(part.strip()) for part in text.split(",") if part.strip()]
+
 
 def _parse_cutoffs(text: str) -> list[int]:
     """Parse the facet-cutoff field into whole minutes.
@@ -275,6 +309,18 @@ class GlobalTab(QWidget):
         flag_row.addStretch()
         outer.addLayout(flag_row)
 
+        valid_row = QHBoxLayout()
+        self._min_valid_caption = QLabel(
+            "min_valid_fraction (Pairs tracked for less of the primary phase "
+            "are excluded, both flies; 0 = off):")
+        self.min_valid_fraction = QLineEdit()
+        self.min_valid_fraction.setPlaceholderText("e.g. 0.8")
+        self.min_valid_fraction.setMaximumWidth(80)
+        valid_row.addWidget(self._min_valid_caption)
+        valid_row.addWidget(self.min_valid_fraction)
+        valid_row.addStretch()
+        outer.addLayout(valid_row)
+
         outer.addSpacing(12)
         outer.addWidget(_section_label("Parameter overrides (leave blank to use rig defaults)"))
 
@@ -325,17 +371,11 @@ class GlobalTab(QWidget):
         self.sleep_threshold.setPlaceholderText("default 5")
         right.addRow("sleep_threshold_min:", self.sleep_threshold)
 
-        self.interaction_distances = QLineEdit()
-        self.interaction_distances.setPlaceholderText("e.g. 8  (pairwise only)")
-        right.addRow("interaction_distances (mm):", self.interaction_distances)
-
         for field in (self.fps, self.mm_per_pixel, self.speed_window,
-                      self.walking_speed, self.sleep_threshold,
-                      self.interaction_distances):
+                      self.walking_speed, self.sleep_threshold):
             field.setMaximumWidth(_OVERRIDE_FIELD_WIDTH)
-        for field in (self.fps, self.mm_per_pixel,
-                      self.interaction_distances):
-            ## These three carry a placeholder that says something ("0.145
+        for field in (self.fps, self.mm_per_pixel):
+            ## These two carry a placeholder that says something ("0.145
             ## (Arena Max)"), so they get the room to say it.
             field.setMinimumWidth(_OVERRIDE_FIELD_WIDTH)
         for field in (self.micromove_min, self.micromove_max):
@@ -350,7 +390,14 @@ class GlobalTab(QWidget):
         ## than stretching the fields back out.
         pcols.addStretch(1)
         outer.addLayout(pcols)
+
+        self._build_pairwise_section(outer)
         outer.addStretch()
+
+        ## The pairwise section follows the tracking type, which a Custom
+        ## experiment changes directly and a typed one fixes.
+        self.tracking_type.currentIndexChanged.connect(
+            lambda _i: self._update_pairwise_section())
 
         # Apply initial placeholders for the default-selected rig
         # (currentIndexChanged does not fire for the initial selection).
@@ -366,6 +413,149 @@ class GlobalTab(QWidget):
     def current_experiment_type(self):
         """The selected ``ExperimentType`` instance."""
         return _et.get_experiment_type(self.experiment_type.currentData())
+
+    # ---- pairwise analysis (ADR-0014, ADR-0015) -----------------------
+
+    def _build_pairwise_section(self, outer) -> None:
+        """The settings behind the pair-proximity and open-field measures,
+        shown only for a pairwise tracking type. Blank = the default, which
+        the placeholder states, read from Parameters so it cannot drift."""
+        defaults = _ParametersMod.Parameters()
+        self._pairwise_section = QWidget()
+        box = QVBoxLayout(self._pairwise_section)
+        box.setContentsMargins(0, 12, 0, 0)
+        box.addWidget(_section_label("Pairwise analysis (leave blank to use the defaults)"))
+        self._pairwise_note = QLabel("")
+        self._pairwise_note.setWordWrap(True)
+        self._pairwise_note.setStyleSheet("color: palette(mid); font-style: italic;")
+        box.addWidget(self._pairwise_note)
+
+        def _column(title):
+            widget = QWidget()
+            col = QVBoxLayout(widget)
+            col.setContentsMargins(0, 0, 0, 0)
+            col.addWidget(QLabel(title))
+            form = QFormLayout()
+            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+            col.addLayout(form)
+            col.addStretch()
+            return widget, form
+
+        prox_widget, self._proximity_form = _column("Proximity and Encounters")
+        self._open_field_widget, self._open_field_form = _column(
+            "Open field (centrophobism, exploration)")
+
+        self.interaction_distances = QLineEdit()
+        self.interaction_distances.setMinimumWidth(_OVERRIDE_FIELD_WIDTH)
+        self.interaction_distances.setMaximumWidth(_OVERRIDE_FIELD_WIDTH)
+        self._proximity_form.addRow("interaction_distances (mm):", self.interaction_distances)
+
+        self.pairwise_fields: dict[str, QLineEdit] = {}
+        for key, _rule, _counter_too in _PAIRWISE_SETTINGS:
+            field = QLineEdit()
+            hint = f"default {getattr(defaults, key):g}"
+            if key == "merge_distance_mm":
+                hint += "  (0 = off)"
+            field.setPlaceholderText(hint)
+            field.setMaximumWidth(_OVERRIDE_FIELD_WIDTH)
+            form = self._open_field_form if key in _OPEN_FIELD_KEYS else self._proximity_form
+            form.addRow(f"{key}:", field)
+            self.pairwise_fields[key] = field
+
+        cols = QHBoxLayout()
+        cols.addWidget(prox_widget)
+        cols.addSpacing(24)
+        cols.addWidget(self._open_field_widget)
+        cols.addStretch(1)
+        box.addLayout(cols)
+        outer.addWidget(self._pairwise_section)
+
+    def _pairwise_settings_in_use(self) -> list[str]:
+        """The pairwise setting keys the current tracking type uses."""
+        mode = self._pairwise_mode()
+        if mode is None:
+            return []
+        return [key for key, _rule, counter_too in _PAIRWISE_SETTINGS
+                if mode == "tracker" or counter_too]
+
+    def _pairwise_errors(self) -> list[str]:
+        """Field problems in the pairwise section — checked only for the
+        settings the current tracking type uses, the ones dump() writes."""
+        if self._pairwise_mode() is None:
+            return []
+        errors: list[str] = []
+        idist = self.interaction_distances.text().strip()
+        if idist:
+            try:
+                values = _number_list(idist)
+            except ValueError:
+                errors.append(f"Interaction distances: '{idist}' is not a "
+                              "comma-separated list of numbers")
+            else:
+                if any(v <= 0 for v in values):
+                    errors.append("Interaction distances: every distance must be "
+                                  "greater than zero")
+                if len(set(values)) != len(values):
+                    errors.append("Interaction distances: each distance once")
+        rules = {key: rule for key, rule, _counter_too in _PAIRWISE_SETTINGS}
+        values: dict[str, float] = {}
+        for key in self._pairwise_settings_in_use():
+            text = self.pairwise_fields[key].text().strip()
+            if not text:
+                continue
+            try:
+                value = float(text)
+            except ValueError:
+                errors.append(f"{key}: '{text}' is not a number")
+                continue
+            if rules[key] == "positive" and value <= 0:
+                errors.append(f"{key}: must be greater than zero")
+            elif rules[key] == "nonneg" and value < 0:
+                errors.append(f"{key}: must be zero or more (0 turns it off)")
+            values[key] = value
+        if "fly_width_mm" in self._pairwise_settings_in_use():
+            defaults = _ParametersMod.Parameters()
+            length = values.get("fly_length_mm", defaults.fly_length_mm)
+            width = values.get("fly_width_mm", defaults.fly_width_mm)
+            if width > length:
+                errors.append("fly_width_mm: the body cannot be wider than it is "
+                              "long (fly_length_mm)")
+        return errors
+
+    def _pairwise_mode(self) -> str | None:
+        """``'tracker'``, ``'counter'``, or None for a non-pairwise type."""
+        return _PAIRWISE_MODES.get(self.tracking_type.currentData())
+
+    def _default_distances(self) -> list:
+        """The interaction distances that apply when the field is blank: the
+        Experiment Type's own default, else the Parameters default."""
+        typed = self.current_experiment_type().parameter_defaults.get("interaction_distances")
+        return list(typed) if typed else list(_ParametersMod.Parameters().interaction_distance_mm)
+
+    def _update_pairwise_section(self) -> None:
+        """Show the section for a pairwise type, and within it only what that
+        type measures."""
+        mode = self._pairwise_mode()
+        self._pairwise_section.setVisible(mode is not None)
+        if mode is None:
+            return
+        tracker = mode == "tracker"
+        for key, _rule, counter_too in _PAIRWISE_SETTINGS:
+            if key not in _OPEN_FIELD_KEYS:
+                self._proximity_form.setRowVisible(self.pairwise_fields[key],
+                                                   tracker or counter_too)
+        self._open_field_widget.setVisible(tracker)
+        self.interaction_distances.setPlaceholderText(
+            "default " + ", ".join(f"{_clean_number(d)}" for d in self._default_distances()))
+        self._pairwise_note.setText(
+            "Interaction is the share of tracked time within each distance; a "
+            "lost run bracketed by distances under merge_distance_mm is the "
+            "two flies touching and counts as contact. Centrophobism and "
+            "exploration take the ROI drawn in DTrack as the arena wall."
+            if tracker else
+            "A counter has no fly identity between frames, so only the pair's "
+            "distance applies; Encounters and the open-field measures need "
+            "the Pairwise Interaction Tracker.")
 
     def _set_rig_options(self, rigs) -> None:
         """Rebuild the rig combo to *rigs* (canonical names), keeping the current
@@ -414,11 +604,18 @@ class GlobalTab(QWidget):
         # criterion, pre-filled with the type default when empty.
         has_exclusion = t.default_min_transitions is not None
         has_flag = t.default_min_movement is not None
-        self._exclusion_section.setVisible(has_exclusion or has_flag)
+        has_valid = t.default_min_valid_fraction is not None
+        self._exclusion_section.setVisible(has_exclusion or has_flag or has_valid)
         for w in (self._min_transitions_caption, self.min_transitions):
             w.setVisible(has_exclusion)
         for w in (self._min_movement_caption, self.min_movement):
             w.setVisible(has_flag)
+        for w in (self._min_valid_caption, self.min_valid_fraction):
+            w.setVisible(has_valid)
+        if has_valid and not self.min_valid_fraction.text().strip():
+            self.min_valid_fraction.setText(f"{t.default_min_valid_fraction:g}")
+        elif not has_valid:
+            self.min_valid_fraction.clear()
         if has_exclusion and not self.min_transitions.text().strip():
             self.min_transitions.setText(str(t.default_min_transitions))
         elif not has_exclusion:
@@ -430,6 +627,10 @@ class GlobalTab(QWidget):
 
         # Calibration overrides: disabled when the type forbids them on this rig.
         self._apply_calibration_lock()
+
+        # Pairwise settings follow the (possibly just fixed) tracking type, and
+        # the default distances shown follow the type.
+        self._update_pairwise_section()
 
         # Summary chip for the owned/derived fields the user can no longer edit.
         if custom:
@@ -607,15 +808,31 @@ class GlobalTab(QWidget):
         self.fps.setText(str(g["fps"]) if "fps" in g else "")
         self.mm_per_pixel.setText(str(g["mm_per_pixel"]) if "mm_per_pixel" in g else "")
         self.speed_window.setText(str(g["speed_window_seconds"]) if "speed_window_seconds" in g else "")
+        ## Every field is set or cleared — never left holding the previously
+        ## opened file's value, which the next save would write into this one.
         mm = g.get("micromove_speed_mm_sec")
-        if mm and len(mm) == 2:
-            self.micromove_min.setText(str(mm[0]))
-            self.micromove_max.setText(str(mm[1]))
+        has_mm = isinstance(mm, (list, tuple)) and len(mm) == 2
+        self.micromove_min.setText(str(mm[0]) if has_mm else "")
+        self.micromove_max.setText(str(mm[1]) if has_mm else "")
         self.walking_speed.setText(str(g["walking_speed_mm_sec"]) if "walking_speed_mm_sec" in g else "")
         self.sleep_threshold.setText(str(g["sleep_threshold_min"]) if "sleep_threshold_min" in g else "")
         idist = g.get("interaction_distances")
-        if idist:
+        try:
+            self.interaction_distances.setText(
+                ", ".join(f"{_clean_number(d)}" for d in idist) if idist else "")
+        except (TypeError, ValueError):
             self.interaction_distances.setText(", ".join(str(d) for d in idist))
+        for key, field in self.pairwise_fields.items():
+            value = g.get(key)
+            try:
+                field.setText("" if value is None else f"{_clean_number(value)}")
+            except (TypeError, ValueError):
+                field.setText(str(value))   # shown as typed; validation flags it
+        if t.default_min_valid_fraction is not None:
+            self.min_valid_fraction.setText(
+                f"{float(g.get('min_valid_fraction', t.default_min_valid_fraction)):g}")
+        else:
+            self.min_valid_fraction.clear()
 
         # Refresh the calibration placeholders / enabled state last, so it sees
         # the values just loaded rather than the previous file's. Doing it here
@@ -634,6 +851,7 @@ class GlobalTab(QWidget):
         "facet_labels",
         "min_transitions",
         "min_movement",
+        "min_valid_fraction",
         "fps",
         "mm_per_pixel",
         "speed_window_seconds",
@@ -641,6 +859,7 @@ class GlobalTab(QWidget):
         "sleep_threshold_min",
         "micromove_speed_mm_sec",
         "interaction_distances",
+        *(key for key, _rule, _counter_too in _PAIRWISE_SETTINGS),
     )
 
     def owned_keys(self) -> tuple[str, ...]:
@@ -710,14 +929,19 @@ class GlobalTab(QWidget):
                             f"{len(values) + 1} phases, so give {len(values) + 1} "
                             f"names (or none) — got {len(names)}")
 
-        idist = self.interaction_distances.text().strip()
-        if idist:
-            try:
-                [float(x.strip()) for x in idist.split(",") if x.strip()]
-            except ValueError:
-                errors.append(f"Interaction distances: '{idist}' is not a comma-separated list of numbers")
+        errors += self._pairwise_errors()
 
         t = self.current_experiment_type()
+        if t.default_min_valid_fraction is not None:
+            text = self.min_valid_fraction.text().strip()
+            if text:
+                try:
+                    if not 0 <= float(text) <= 1:
+                        raise ValueError
+                except ValueError:
+                    errors.append(
+                        f"min_valid_fraction: '{text}' must be a number from 0 to 1 "
+                        f"(0 turns the exclusion off)")
         if t.default_min_transitions is not None:
             text = self.min_transitions.text().strip()
             if text:
@@ -798,14 +1022,23 @@ class GlobalTab(QWidget):
             except ValueError:
                 pass
 
-        idist = self.interaction_distances.text().strip()
-        if idist:
-            try:
-                g["interaction_distances"] = [
-                    float(x.strip()) for x in idist.split(",") if x.strip()
-                ]
-            except ValueError:
-                pass
+        ## Pairwise settings: written only for a pairwise type, and only the
+        ## ones it uses — a setting the analysis never reads is not left in the
+        ## file to suggest otherwise. Whole numbers stay whole (_clean_number).
+        if self._pairwise_mode() is not None:
+            idist = self.interaction_distances.text().strip()
+            if idist:
+                try:
+                    g["interaction_distances"] = _number_list(idist)
+                except ValueError:
+                    pass  # validation_errors() blocks the save first
+            for key in self._pairwise_settings_in_use():
+                text = self.pairwise_fields[key].text().strip()
+                if text:
+                    try:
+                        g[key] = _clean_number(text)
+                    except ValueError:
+                        pass  # validation_errors() blocks the save first
 
         # Experiment Type: a typed config names its type and omits the fields the
         # type owns (they are derived, ADR-0001). A Custom config carries no
@@ -835,6 +1068,13 @@ class GlobalTab(QWidget):
                 try:
                     value = float(text)
                     g["min_movement"] = int(value) if value == int(value) else value
+                except ValueError:
+                    pass  # validation_errors() blocks the save first
+        if t.default_min_valid_fraction is not None:
+            text = self.min_valid_fraction.text().strip()
+            if text:
+                try:
+                    g["min_valid_fraction"] = _clean_number(text)
                 except ValueError:
                     pass  # validation_errors() blocks the save first
 
@@ -887,8 +1127,20 @@ class TrackingRegionsTab(QWidget):
         self.count_spin.setValue(24)
         bulk_btn = QPushButton("Generate N regions")
         bulk_btn.clicked.connect(self._bulk_generate)
+        ## The plate as recorded: the region names in the DTrack export's ROI
+        ## sheet. The window supplies the source (it knows where the config
+        ## lives); without one the button stays hidden.
+        self.regions_source = None
+        self.from_data_btn = QPushButton("From data")
+        self.from_data_btn.setToolTip(
+            "Use the tracking regions in this experiment's DTrack export "
+            "(data/*.xlsx, ROI sheet). Regions already here keep their "
+            "treatments.")
+        self.from_data_btn.clicked.connect(self.fill_from_data)
+        self.from_data_btn.setVisible(False)
         btn_row.addWidget(add_btn)
         btn_row.addWidget(rm_btn)
+        btn_row.addWidget(self.from_data_btn)
         btn_row.addStretch()
         btn_row.addWidget(QLabel("N:"))
         btn_row.addWidget(self.count_spin)
@@ -1022,6 +1274,62 @@ class TrackingRegionsTab(QWidget):
         n = self.count_spin.value()
         for i in range(n):
             self._add_row(name=f"T_{i}")
+
+    def set_regions_source(self, source) -> None:
+        """Give the tab a callable returning the recording's region names
+        (or None to take it away); the From-data button follows it."""
+        self.regions_source = source
+        self.from_data_btn.setVisible(source is not None)
+
+    def data_region_names(self) -> list[str]:
+        """The region names in the recording, or [] without a source."""
+        if self.regions_source is None:
+            return []
+        try:
+            return list(self.regions_source() or [])
+        except Exception:  # noqa: BLE001 — an unreadable export is no regions
+            return []
+
+    def merge_region_names(self, names) -> None:
+        """Make the table exactly *names*, in that order, keeping every row
+        whose region is still there — its treatments and multipliers intact —
+        so filling from the data never wipes an assignment it can keep."""
+        existing = {row["name"]: row for row in self._snapshot_rows()}
+        self.table.setRowCount(0)
+        for name in names:
+            row = existing.get(name)
+            if row is None:
+                self._add_row(name=name)
+            else:
+                self._add_row(name=name, factor_values=row["factors"], x=row["x"],
+                              y=row["y"], extra_factors=row["extras"])
+
+    def fill_from_data(self) -> None:
+        """The From-data button: take the plate from the recording."""
+        from PyQt6.QtWidgets import QMessageBox
+
+        names = self.data_region_names()
+        if not names:
+            QMessageBox.information(
+                self, "Regions from data",
+                "No tracking regions were found: put the DTrack export "
+                "(.xlsx with its ROI sheet) in this experiment's data/ folder.")
+            return
+        have = self.region_names()
+        if have == names:
+            QMessageBox.information(self, "Regions from data",
+                                    "The table already matches the recording.")
+            return
+        dropped = [n for n in have if n not in names]
+        if dropped:
+            resp = QMessageBox.question(
+                self, "Regions from data",
+                f"The recording has {len(names)} tracking regions. These "
+                f"{len(dropped)} are not in it and will be removed: "
+                f"{', '.join(dropped)}.\n\nRegions in both keep their treatments.")
+            if resp != QMessageBox.StandardButton.Yes:
+                return
+        self.merge_region_names(names)
 
     def region_names(self) -> list[str]:
         """The non-empty region names currently in the table, in order."""

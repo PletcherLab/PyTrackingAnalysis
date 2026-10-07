@@ -99,6 +99,34 @@ def has_experiment_data(path) -> bool:
                for entry in entries)
 
 
+def tracking_regions_in_data(path) -> list[str]:
+    """The tracking-region names in an experiment's DTrack export (the ROI
+    sheet's ``Tracking`` rows), in natural order — the plate as recorded, for
+    a type that takes its plate from the data (Paired Open Field, ADR-0016).
+    Empty when there is no readable export."""
+    import pandas as pd
+    from natsort import natsorted
+
+    from . import layout
+
+    data = layout.data_dir(str(path))
+    try:
+        workbooks = sorted(entry for entry in os.listdir(data)
+                           if entry.lower().endswith(".xlsx")
+                           and not entry.startswith(("~$", ".")))
+    except OSError:
+        return []
+    for workbook in workbooks:
+        try:
+            roi = pd.read_excel(os.path.join(data, workbook), sheet_name="ROI")
+        except Exception:  # noqa: BLE001 — not a DTrack export; try the next
+            continue
+        if {"Name", "Type"} <= set(roi.columns):
+            names = roi.loc[roi["Type"] == "Tracking", "Name"].dropna().astype(str)
+            return natsorted(dict.fromkeys(names))
+    return []
+
+
 def create_project_file(project_dir, name: str | None = None,
                         notes: str = "", design: dict | None = None) -> str:
     """Write (or update) ``project.yaml`` — upgrading e.g. an old batch

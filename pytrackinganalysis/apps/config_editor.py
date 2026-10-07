@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 
 from .. import config_validation
 from .. import experiment_types as _et
+from .. import project as project_mod
 from ..io_utils import atomic_write_text
 from ..help import HelpButton, make_topbar_help_button
 from ..ui import (
@@ -290,6 +291,11 @@ class ConfigEditorWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Could not load file:\n{err}")
             return
         self._loaded_config = config if isinstance(config, dict) else {}
+        ## The recording beside this config is where a plate that is not
+        ## fixed by the rig comes from (Paired Open Field, ADR-0016).
+        experiment_dir = path.parent
+        self._tracking_tab.set_regions_source(
+            lambda: project_mod.tracking_regions_in_data(experiment_dir))
         self._loading = True
         try:
             self._global_tab.load(config)
@@ -297,14 +303,18 @@ class ConfigEditorWindow(QMainWindow):
             self._counting_tab.load(config)
         finally:
             self._loading = False
-        # A freshly opened typed project whose rig fixes the plate but has no
-        # regions yet (e.g. a scaffolded Valence project) gets them laid out
-        # silently. Only when empty — an existing plate is never touched on load.
+        # A freshly opened project with no regions yet gets them laid out
+        # silently: the rig's fixed plate for a type that has one (e.g. a
+        # scaffolded Valence project), else the plate the recording holds.
+        # Only when empty — an existing plate is never touched on load.
         t = self._global_tab.current_experiment_type()
         rig = self._global_tab.tracking_rig.currentData()
         expected = t.regions_for_rig(rig) if hasattr(t, "regions_for_rig") else None
-        if expected and not self._tracking_tab.region_names():
-            self._tracking_tab.set_region_names(expected, self._plate(t, rig))
+        if not self._tracking_tab.region_names():
+            if expected:
+                self._tracking_tab.set_region_names(expected, self._plate(t, rig))
+            else:
+                self._tracking_tab.merge_region_names(self._tracking_tab.data_region_names())
         self._current_path = path
         self._disk_text = yaml.safe_dump(config, default_flow_style=False, sort_keys=False)
         self._set_title(path)
@@ -381,6 +391,11 @@ class ConfigEditorWindow(QMainWindow):
         t = self._global_tab.current_experiment_type()
         expected = t.regions_for_rig(rig) if hasattr(t, "regions_for_rig") else None
         if not expected:
+            ## No fixed plate: an empty table takes the recording's regions
+            ## (Paired Open Field); a filled one is the user's to change, with
+            ## the From-data button.
+            if not self._tracking_tab.region_names():
+                self._tracking_tab.merge_region_names(self._tracking_tab.data_region_names())
             return
         have = self._tracking_tab.region_names()
         ## Not just the default plate: a rig run at more than one size (the

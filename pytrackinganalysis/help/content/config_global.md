@@ -46,6 +46,15 @@ Experiment Types may expose quality knobs:
 - **`min_movement`** - for Valence, flies below this movement rate during the first phase are flagged in `LowMovementFlag` but kept in the results; `0` turns the flag off.
 - **`min_valid_fraction`** - for Paired Open Field, a Pair tracked (or merged) for under this fraction of the primary phase is excluded, both flies; `0` turns the exclusion off.
 
+## Pairwise analysis
+
+Shown only for a pairwise tracking type (the Pairwise Interaction Tracker or Counter — and so for every Paired Open Field experiment). Leave a field blank to use the default its placeholder states.
+
+- **Proximity and Encounters** — `interaction_distances` (mm; Paired Open Field defaults to 4, 8, 10), `merge_distance_mm` (a lost run bracketed by distances under it is the two flies touching and counts as contact; `0` = never), and the Encounter settings `encounter_hysteresis_mm`, `encounter_gap_s`, `encounter_min_s`.
+- **Open field** — `wall_zone_mm` (the wall-contact ring) and the body ellipse used for exploration, `fly_length_mm` × `fly_width_mm`. Centrophobism and exploration take the ROI drawn in DTrack as the arena wall.
+
+A counter has no fly identity between frames, so it shows only the interaction distances and merge distance; Encounters and the open-field measures need the tracker. Settings a tracking type does not use are not written to the file.
+
 ## Parameter overrides
 
 Leave overrides blank to use rig defaults. Fill them only when the recording needs a deliberate departure from the preset: `fps`, `mm_per_pixel`, speed windows, walking/sleep thresholds, micro-movement thresholds, or pairwise interaction distances. Pairwise trackers also read `merge_distance_mm`, `encounter_hysteresis_mm`, `encounter_gap_s`, `encounter_min_s`, `wall_zone_mm`, `fly_length_mm` and `fly_width_mm` (see the user guide, §4.1.1).
