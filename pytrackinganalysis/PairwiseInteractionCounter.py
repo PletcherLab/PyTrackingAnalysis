@@ -28,10 +28,13 @@ class PairwiseInteractionCounter(Counter.Counter):
         self.trackers[0].set_neighbor(self.trackers[1])
         self.trackers[1].set_neighbor(self.trackers[0])
       
-    def summarize(self, range_minutes=(0,0)):        
+    def summarize(self, range_minutes=(0,0)):
         tmp = Counter.Counter.summarize(self, range_minutes)
-        tmp2 = self.trackers[0].summarize(range_minutes)
-        tmp3 = self.trackers[1].summarize(range_minutes)
+        ## Pair measures only: the pseudo-trackers have no stable fly identity
+        ## from frame to frame, so their per-fly open-field measures would be
+        ## meaningless (and the costliest thing in the pipeline to compute).
+        tmp2 = self.trackers[0].get_pair_measures(range_minutes)
+        tmp3 = self.trackers[1].get_pair_measures(range_minutes)
 
         mean_neighbor_distance = (tmp2['MeanDistance'] + tmp3['MeanDistance'])/2
         median_neighbor_distance = (tmp2['MedianDistance'] + tmp3['MedianDistance'])/2
@@ -46,7 +49,8 @@ class PairwiseInteractionCounter(Counter.Counter):
         percent_frames_interacting_series = pd.Series(percent_frames_interacting, index=distance_names2)
         
         result = pd.concat([tmp,pd.Series({'MeanDistance': mean_neighbor_distance}),pd.Series({"MedianDistance" : median_neighbor_distance}),\
-            pd.Series({'ValidFrames': total_valid_frames}),frames_interacting_series,percent_frames_interacting_series])
+            pd.Series({'ValidFrames': total_valid_frames, 'MergedFraction': tmp2['MergedFraction']}),
+            frames_interacting_series,percent_frames_interacting_series])
 
         return result      
     

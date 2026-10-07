@@ -44,7 +44,8 @@ Experiment Types may expose quality knobs:
 
 - **`min_transitions`** - for Valence, flies with fewer transitions than this during the primary phase are excluded from every result and listed in `*_Excluded.csv`; `0` turns the exclusion off.
 - **`min_movement`** - for Valence, flies below this movement rate during the first phase are flagged in `LowMovementFlag` but kept in the results; `0` turns the flag off.
+- **`min_valid_fraction`** - for Paired Open Field, a Pair tracked (or merged) for under this fraction of the primary phase is excluded, both flies; `0` turns the exclusion off.
 
 ## Parameter overrides
 
-Leave overrides blank to use rig defaults. Fill them only when the recording needs a deliberate departure from the preset: `fps`, `mm_per_pixel`, speed windows, walking/sleep thresholds, micro-movement thresholds, or pairwise interaction distances.
+Leave overrides blank to use rig defaults. Fill them only when the recording needs a deliberate departure from the preset: `fps`, `mm_per_pixel`, speed windows, walking/sleep thresholds, micro-movement thresholds, or pairwise interaction distances. Pairwise trackers also read `merge_distance_mm`, `encounter_hysteresis_mm`, `encounter_gap_s`, `encounter_min_s`, `wall_zone_mm`, `fly_length_mm` and `fly_width_mm` (see the user guide, §4.1.1).

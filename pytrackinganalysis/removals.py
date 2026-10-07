@@ -49,6 +49,35 @@ REMOVAL_PREFIX = "Removed"
 #: The automatic criterion's reason string (ADR-0003).
 LOW_TRANSITION_REASON = "Low transitions"
 
+#: Paired Open Field's automatic criterion (ADR-0016).
+LOW_TRACKING_REASON = "Low tracking"
+
+
+# ---------------------------------------------------------------------------
+# Wording for a type's automatic criterion
+# ---------------------------------------------------------------------------
+# An exclusion frame's attrs carry the type's own words for its criterion
+# (``policy_label``, ``policy_cause``, ``policy_none``, ``policy_off``). The
+# Low-Transition Exclusion predates them, so absent attrs mean its wording —
+# a Valence report reads exactly as it did before a second criterion existed.
+
+def policy_count(attrs) -> int:
+    """How many flies the type's automatic criterion excluded."""
+    return int(attrs.get("n_policy", attrs.get("n_low_transitions", 0)) or 0)
+
+
+def policy_label(attrs) -> str:
+    """Short name for a count breakdown: ``7 (4 removed, 3 low tracking)``."""
+    return attrs.get("policy_label") or "low transitions"
+
+
+def policy_cause(attrs) -> str:
+    """Why those flies left, completing ``"3 fly(ies) …"``."""
+    if attrs.get("policy_cause"):
+        return attrs["policy_cause"]
+    return (f"with fewer than {attrs.get('min_transitions')} transitions during "
+            f"the {attrs.get('phase_label', 'Primary')} phase")
+
 
 # ---------------------------------------------------------------------------
 # The per-experiment sidecar

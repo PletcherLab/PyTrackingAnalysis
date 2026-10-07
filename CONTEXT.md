@@ -102,7 +102,8 @@ and rigs may differ. New replicates are scaffolded from the design.
 The Project-level results built by stacking each replicate's *filtered*
 summaries (exclusions and flags already applied) with an `Experiment` column:
 combined summary CSVs, aggregated exclusions, and statistics — pooled
-per-fly tests (Welch/Tukey, matching the plots) beside a linear mixed model
+per-fly (per-Pair, for a pairwise tracker) tests (Welch/Tukey, matching the
+plots) beside a linear mixed model
 (treatment fixed, experiment random) that accounts for between-replicate
 variation — or, for a single treatment, a Test against Indifference with the
 same pooled + mixed pairing.
@@ -221,7 +222,7 @@ analyzed replicates. The Script Editor flags them for cleanup.
 _Avoid_: deprecated action, legacy step
 
 **Experiment Type**:
-A named bundle (e.g. Valence) that selects one Tracking Type and constrains the
+A named bundle (e.g. Valence, Paired Open Field) that selects one Tracking Type and constrains the
 rest of an experiment — the allowed rigs, the facets, the required counting
 regions, the set of analyses that run, and the report produced. It is the
 top-level thing a scientist chooses; everything else is derived or constrained
@@ -312,8 +313,9 @@ from figures, summary measures, statistics, and the summary CSVs, but listed
 with its **Reason** in the report's removal table and `<exp>_Excluded.csv`,
 and still shown in data-quality output. The reason is a column, not a class:
 there is one exclusion list per experiment, and one row per fly, however many
-criteria produced it. Today's reasons are the Low-Transition Exclusion and a
-**Removed Region**; when both apply the reason string names both, the
+criteria produced it. Today's reasons are the Low-Transition Exclusion, the
+Low-Tracking Exclusion and a **Removed Region**; when two apply the reason
+string names both, the
 experimenter's observation first (`Removed: dead at ~20 min; Low
 transitions`), because an observation outranks an inferred rule.
 _Avoid_: dropped fly, filtered fly
@@ -356,6 +358,96 @@ the *first* facet window is reported as potentially an issue — never removed
 experiment with more than half of its analysed flies flagged is itself noted
 as potentially an issue on the report cover.
 _Avoid_: exclusion (a flag never removes a fly), QC filter
+
+**Paired Open Field Experiment**:
+The second Experiment Type (`experiment_type: PairedOpenField`). Two flies
+of the same treatment share each tracking region, and the experiment asks
+both whether they engage socially and whether they are healthy and behaving
+normally in an open arena. A pairwise-interaction tracker on a Small Arena,
+Arena Max, Colosseum (preset calibration only) or Movie rig (fps and
+mm/pixel required); plates are whatever regions the data holds; default
+phases [10, 70] as for Valence (ADR-0016).
+_Avoid_: social assay, pairwise experiment (pairwise is the Tracking Type),
+open field (that name is kept for a future single-fly type)
+
+**Pair**:
+The two flies sharing a tracking region in a pairwise-tracker experiment,
+and the **unit of analysis** there: the summary CSVs hold one row per Pair,
+per-fly measures averaged across its two flies, and every test counts Pairs
+(ADR-0013). The flies' own rows are in `_Summary_PerFly.csv`, which nothing
+statistical reads. Treatment belongs to the region, so both flies always
+share every factor level.
+_Avoid_: dyad, couple, partner (the other fly of a Pair is its partner; the
+two together are the Pair)
+
+**Merged Frame**:
+A frame in which the two flies of a Pair touch and DTrack resolves them as
+one blob, losing one fly. Recognised by context: a run of lost frames whose
+last valid distance before and first valid distance after are both under
+`merge_distance_mm` (default 3 mm). Counted as contact — valid, distance 0 —
+and reported as `MergedFraction`. Any other lost run is a genuinely
+unknown distance and stays out (ADR-0014).
+_Avoid_: occlusion, lost frame (a lost frame is the general case; a Merged
+Frame is the lost frame we can account for)
+
+**Encounter**:
+One bout of a Pair's flies being within an interaction distance `d`: it
+starts below `d`, ends only above `d` + 0.5 mm, survives breaks shorter than
+0.5 s, and must last at least 0.5 s. Summarised per `d` as a rate, a mean
+duration and a latency. Distinguishes many brief meetings from one long
+huddle, which `PercentInteracting` cannot.
+_Avoid_: interaction (the time-fraction measure), contact (distance 0 /
+Merged Frames)
+
+**Centrophobism Index (CI)**:
+A −1..+1 score of how much a fly avoids the open centre of its arena:
+P(periphery) − P(centre zone), over its walking frames, where the **centre
+zone** is the scaled copy of the arena holding exactly half its area. 0 =
+uses the arena uniformly; positive = wall-hugging (the PI's sign
+convention). Scale-free, so it compares across rigs; walking-only, so it
+does not re-measure activity — flies rest at the wall (ADR-0015).
+_Avoid_: thigmotaxis score, wall preference
+
+**Exploration**:
+How much of the arena a fly's body has touched. The body is a 2.5 × 1.0 mm
+ellipse oriented along the fly's path and swept between frames; coverage is
+counted on the pixel raster inside the ROI, for the whole arena and for the
+centre zone and periphery separately. **Exploration AUC** is mean coverage
+over a window — it keeps separating fast from slow explorers after both have
+covered everything (ADR-0015).
+_Avoid_: arena coverage grid, percent explored (say Explored Fraction for the
+end-of-window value)
+
+**ROI Check**:
+Per-region test that the ROI drawn in DTrack matches the physical arena,
+because the ROI *is* the wall for centrophobism and exploration:
+`ReachGap_mm`, how close both flies come to the ROI edge (0.5th percentile),
+flagged beyond ±1 mm. About +0.5 mm is a well-drawn ROI; much more means the
+ROI is too big or the pair barely moved, negative means positions outside
+it.
+_Avoid_: calibration check (calibration is mm/pixel)
+
+**Low-Tracking Exclusion**:
+Paired Open Field inclusion criterion: a Pair is excluded when its valid
+frames — Merged Frames included — are under `min_valid_fraction` (yaml
+`global:`; default 0.8; 0 = off) of the Primary Phase. Acts on the region,
+so both flies go; no frames counts as failing (ADR-0016).
+_Avoid_: QC filter, low-quality exclusion
+
+**Possibly-Dead Flag**:
+Paired Open Field advisory flag: a fly whose positions over the final 20
+minutes stay within one body length of their median (99th percentile, so a
+glitch frame cannot clear it). Never removes — death is an observation,
+declared as a Removed Region once the experimenter confirms it (ADR-0010).
+_Avoid_: dead fly (unconfirmed), immobility exclusion
+
+**Metric Tier**:
+Which of three roles a summary measure plays in a Tracking Type's
+statistics: **primary** (tested and headlined), **secondary** (tested,
+labelled exploratory) or **descriptive** (in the CSVs, never tested).
+P-values are uncorrected at every tier; the tier tells the reader how much
+weight a result was designed to carry.
+_Avoid_: outcome level, endpoint
 
 **Publication Figure**:
 A hand-curated, journal-ready vector figure (SVG with editable text, or PDF)

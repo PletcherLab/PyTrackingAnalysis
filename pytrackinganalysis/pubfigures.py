@@ -57,7 +57,54 @@ PLOT_TYPES: dict[str, dict] = {
         "y_limits": None, "ref_line": None, "free_y": True,
         "display": "Transitions (faceted)",
     },
+    ## Paired Open Field primary metrics (ADR-0016). Interaction plots are per
+    ## configured distance, so they are generated: see plot_type().
+    "faceted_centrophobism": {
+        "metric": "CentrophobismIndex", "y_label": "Centrophobism Index",
+        "y_limits": (-1.0, 1.0), "ref_line": 0.0,
+        "display": "Centrophobism (faceted)",
+    },
+    "faceted_exploration": {
+        "metric": "ExplorationAUC", "y_label": "Exploration AUC",
+        "y_limits": (0.0, 1.0), "ref_line": None,
+        "display": "Exploration (faceted)",
+    },
 }
+
+#: Generated plot type: one per interaction distance a summary carries.
+_INTERACTING_PREFIX = "faceted_interacting_"
+_INTERACTING_METRIC = "PercentInteracting_"
+
+
+def plot_type(plot_id) -> dict | None:
+    """The plot type for *plot_id*, including the generated
+    ``faceted_interacting_<d>`` ones; ``None`` for an unknown id."""
+    plot_id = str(plot_id)
+    if plot_id in PLOT_TYPES:
+        return PLOT_TYPES[plot_id]
+    if plot_id.startswith(_INTERACTING_PREFIX) and len(plot_id) > len(_INTERACTING_PREFIX):
+        d = plot_id[len(_INTERACTING_PREFIX):]
+        return {"metric": f"{_INTERACTING_METRIC}{d}",
+                "y_label": f"Fraction of time within {d} mm",
+                "y_limits": (0.0, 1.0), "ref_line": None,
+                "display": f"Interaction < {d} mm (faceted)"}
+    return None
+
+
+def plot_types_for(columns) -> dict:
+    """``{plot_id: info}`` for every plot type whose metric is in *columns* —
+    what a given summary can actually draw, in a stable order: interaction
+    plots (per distance) first, then the static types."""
+    columns = [str(c) for c in columns]
+    out: dict = {}
+    for col in columns:
+        if col.startswith(_INTERACTING_METRIC):
+            plot_id = f"{_INTERACTING_PREFIX}{col[len(_INTERACTING_METRIC):]}"
+            out[plot_id] = plot_type(plot_id)
+    for plot_id, info in PLOT_TYPES.items():
+        if info["metric"] in columns:
+            out[plot_id] = info
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -189,7 +236,9 @@ class PlotSpec:
 
 
 def default_spec(plot_id: str, region1: str = "region 1") -> PlotSpec:
-    info = PLOT_TYPES[plot_id]
+    info = plot_type(plot_id)
+    if info is None:
+        raise KeyError(plot_id)
     y_limits = info["y_limits"]
     return PlotSpec(
         y_label=str(info["y_label"]).format(region1=region1),
@@ -240,7 +289,7 @@ def load_project_specs(project_dir: str) -> ProjectSpecs:
                 for k, v in (raw.get("styles") or {}).items()},
         plots={str(k): PlotSpec.from_dict(v)
                for k, v in (raw.get("plots") or {}).items()
-               if str(k) in PLOT_TYPES},
+               if plot_type(k) is not None},
     )
     specs.ensure_default_style()
     return specs
@@ -758,7 +807,7 @@ def _pvalue_layers(data: pd.DataFrame, style: PlotStyle, y_limits,
 
 
 def figure_for(experiment, plot_id: str, spec: PlotSpec, style: PlotStyle):
-    metric = PLOT_TYPES[plot_id]["metric"]
+    metric = plot_type(plot_id)["metric"]
     return build_ggplot(faceted_data(experiment, metric), spec, style)
 
 
@@ -832,18 +881,20 @@ def render_all(experiment, fmt: str = "svg", out_dir: str | None = None,
                plot_ids: list[str] | None = None) -> list[str]:
     """Re-render figures straight from ``plot_specs.yaml`` (no editor).
 
-    Renders *plot_ids*, else every plot the file defines, else all known
-    plot types with their defaults. Returns the written paths.
+    Renders *plot_ids*, else every plot the file defines, else every plot
+    type the experiment's summary can draw, with its defaults. Returns the
+    written paths.
     """
     project_dir = getattr(experiment, "project_directory", None) or "."
     specs = load_project_specs(project_dir)
-    ids = list(plot_ids or specs.plots.keys() or PLOT_TYPES.keys())
+    ids = list(plot_ids or specs.plots.keys()
+               or plot_types_for(experiment.arena.summarize().columns).keys())
     out_dir = out_dir or os.path.join(project_dir, FIGURES_DIRNAME)
     region1 = region1_name(experiment)
 
     written: list[str] = []
     for plot_id in ids:
-        if plot_id not in PLOT_TYPES:
+        if plot_type(plot_id) is None:
             continue
         spec = specs.plots.get(plot_id) or default_spec(plot_id, region1)
         style = specs.style_for(spec)

@@ -561,12 +561,17 @@ class Project:
         path = self._summary_csv(name)
         if path:
             status["analyzed"] = True
+            ## A pairwise summary is one row per Pair (ADR-0013); flies — the
+            ## unit the excluded count is in — are in its per-fly companion.
+            per_fly = self._summary_csv(name, "_Summary_PerFly.csv")
             try:
-                df = pd.read_csv(path)
+                df = pd.read_csv(per_fly or path)
                 status["flies"] = len(df)
-                if "LowMovementFlag" in df.columns:
+                flag_columns = [c for c in ("LowMovementFlag", "PossiblyDeadFlag")
+                                if c in df.columns]
+                if flag_columns:
                     status["flagged"] = int(
-                        df["LowMovementFlag"].fillna(False).astype(bool).sum())
+                        df[flag_columns].fillna(False).astype(bool).any(axis=1).sum())
             except Exception:  # noqa: BLE001
                 pass
         excl = self._summary_csv(name, "_Excluded.csv")
@@ -743,11 +748,19 @@ class Project:
     # Statistics: pooled per-fly tests + mixed-model companion
     # ------------------------------------------------------------------
 
-    def _metrics(self) -> list[str]:
-        from .Experiment import _TRACKING_TYPE_METRICS
+    def _metrics(self, columns=()) -> list[str]:
+        """The metrics the experiments compare, resolved by the same policy.
+
+        Interaction distances are per replicate config, so they are read off
+        the pooled *columns* (``PercentInteracting_<d>``) rather than guessed.
+        """
+        from .Experiment import stats_metrics
         from . import Parameters
         tt = Parameters.TrackingType[self.tracking_type_name]
-        return list(_TRACKING_TYPE_METRICS.get(tt) or []) or ["FinalPI"]
+        prefix = "PercentInteracting_"
+        distances = [str(c)[len(prefix):] for c in columns
+                     if str(c).startswith(prefix)]
+        return stats_metrics(tt, distances) or ["FinalPI"]
 
     def _metric_frames(self, summary: pd.DataFrame,
                        facet: pd.DataFrame | None):
@@ -764,7 +777,10 @@ class Project:
         else:
             frames.append(("Whole recording", summary))
 
-        for metric in self._metrics():
+        columns = list(summary.columns) if summary is not None else []
+        if facet is not None:
+            columns += [c for c in facet.columns if c not in columns]
+        for metric in self._metrics(columns):
             for label, frame in frames:
                 if metric not in frame.columns:
                     continue
@@ -1046,9 +1062,7 @@ class Project:
                 if self.experiment_names else "region 1")
         out_dir = os.path.join(self.project_directory, pf.FIGURES_DIRNAME)
         written: list[str] = []
-        for plot_id, info in pf.PLOT_TYPES.items():
-            if info["metric"] not in facet.columns:
-                continue
+        for plot_id, info in pf.plot_types_for(facet.columns).items():
             spec = specs.plots.get(plot_id) or pf.default_spec(plot_id, region1)
             style = specs.style_for(spec)
             df = pf.faceted_data_from_combined(
@@ -1081,9 +1095,7 @@ class Project:
         region1 = next(iter(self.configs[self.experiment_names[0]]
                             .get("counting_regions") or {}), "region 1")
         blocks = []
-        for plot_id, info in pf.PLOT_TYPES.items():
-            if info["metric"] not in facet.columns:
-                continue
+        for plot_id, info in pf.plot_types_for(facet.columns).items():
             spec = specs.plots.get(plot_id) or pf.default_spec(plot_id, region1)
             style = specs.style_for(spec)
             try:

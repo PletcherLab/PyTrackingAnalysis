@@ -428,11 +428,8 @@ class GlobalTab(QWidget):
         elif not has_flag:
             self.min_movement.clear()
 
-        # Calibration overrides: disabled when the type forbids them.
-        if not custom and not t.allow_calibration_override:
-            for w in (self.fps, self.mm_per_pixel):
-                w.clear()
-                w.setEnabled(False)
+        # Calibration overrides: disabled when the type forbids them on this rig.
+        self._apply_calibration_lock()
 
         # Summary chip for the owned/derived fields the user can no longer edit.
         if custom:
@@ -479,8 +476,24 @@ class GlobalTab(QWidget):
             self.mm_per_pixel.setPlaceholderText(
                 f"{mm} ({rig_label} default)" if mm is not None else ""
             )
+        ## A type may lock calibration on preset rigs only (Paired Open Field,
+        ## ADR-0016), so the lock follows the rig as well as the type.
+        self._apply_calibration_lock()
 
         self.rigChanged.emit(rig or "")
+
+    def _apply_calibration_lock(self) -> None:
+        """Clear and disable fps / mm_per_pixel when the selected Experiment
+        Type does not let this rig override its calibration."""
+        selector = getattr(self, "experiment_type", None)
+        if selector is None:
+            return  # still building: the type selector does not exist yet
+        t = self.current_experiment_type()
+        if t.is_custom or t.calibration_overridable(self.tracking_rig.currentData()):
+            return
+        for w in (self.fps, self.mm_per_pixel):
+            w.clear()
+            w.setEnabled(False)
 
     def _on_facet_toggled(self, state) -> None:
         self.facet_cutoffs.setEnabled(bool(state))
@@ -803,7 +816,7 @@ class GlobalTab(QWidget):
             g.pop("experiment_type", None)
         else:
             g["experiment_type"] = t.name
-            for key in t.owned_keys():
+            for key in t.owned_keys(g.get("tracking_rig")):
                 g.pop(key, None)
 
         ## Quality criteria: written only for a type that has them. An empty

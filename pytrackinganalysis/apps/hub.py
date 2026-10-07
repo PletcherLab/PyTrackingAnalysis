@@ -2588,16 +2588,31 @@ class HubWindow(QMainWindow):
         if self._exp is None:
             return None
         name = self._loaded_experiment_name()
-        flagged = getattr(self._exp, "flagged_flies", None)
+        total, n_flagged = self._fly_counts()
         excluded = getattr(self._exp, "excluded_flies", None)
         bits = [name]
-        if flagged is not None and flagged.attrs.get("n_total"):
-            bits.append(f"{flagged.attrs['n_total']} flies")
+        if total:
+            bits.append(f"{total} flies")
         if excluded is not None:
             bits.append(f"{len(excluded)} " + ("ex" if short else "excluded"))
-        if flagged is not None:
-            bits.append(f"{len(flagged)} " + ("flag" if short else "flagged"))
+        if n_flagged is not None:
+            bits.append(f"{n_flagged} " + ("flag" if short else "flagged"))
         return " · ".join(bits)
+
+    def _fly_counts(self):
+        """``(analysed flies, flagged)`` from load-time attributes. The
+        Low-Movement Flag carries both; a type with advisory flags instead
+        (Paired Open Field) counts its trackers and its flag rows."""
+        flagged = getattr(self._exp, "flagged_flies", None)
+        if flagged is not None:
+            return flagged.attrs.get("n_total"), len(flagged)
+        advisory = getattr(self._exp, "advisory_flags", None)
+        if advisory is None:
+            return None, None
+        excluded = getattr(self._exp, "excluded_flies", None)
+        trackers = getattr(getattr(self._exp, "arena", None), "trackers", None) or {}
+        total = len(trackers) - (len(excluded) if excluded is not None else 0)
+        return total, len(advisory)
 
     def _experiment_tile_lines(self) -> list[str] | None:
         """The Experiment tile's two lines — which experiment, and its
@@ -2617,9 +2632,8 @@ class HubWindow(QMainWindow):
         if tracking:
             which.insert(0, f"{name} — {tracking}")
         ## Its flies: whole words, then abbreviations, then just the total.
-        flagged = getattr(self._exp, "flagged_flies", None)
         excluded = getattr(self._exp, "excluded_flies", None)
-        total = flagged.attrs.get("n_total") if flagged is not None else None
+        total, n_flagged = self._fly_counts()
         long_bits, short_bits = [], []
         if total:
             long_bits.append(f"{total} flies")
@@ -2627,9 +2641,9 @@ class HubWindow(QMainWindow):
         if excluded is not None:
             long_bits.append(f"{len(excluded)} excluded")
             short_bits.append(f"{len(excluded)} ex")
-        if flagged is not None:
-            long_bits.append(f"{len(flagged)} flagged")
-            short_bits.append(f"{len(flagged)} flag")
+        if n_flagged is not None:
+            long_bits.append(f"{n_flagged} flagged")
+            short_bits.append(f"{n_flagged} flag")
         flies = [" · ".join(long_bits), " · ".join(short_bits)]
         if total:
             flies.append(f"{total} flies")

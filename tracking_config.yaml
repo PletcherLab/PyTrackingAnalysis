@@ -58,7 +58,20 @@ global:
   #
   # Distance thresholds (mm) used for interaction detection.
   # Applies to PAIRWISEINTERACTIONTRACKER and PAIRWISEINTERACTIONCOUNTER only.
+  # (A Paired Open Field experiment defaults to [4, 8, 10].)
   # interaction_distances: [8]
+  #
+  # Pairwise trackers only (docs/adr/0014, 0015). A lost run bracketed by
+  # distances below merge_distance_mm is two flies touching (0 = off).
+  # merge_distance_mm: 3
+  # Encounters: hysteresis above the threshold, gaps bridged, minimum length.
+  # encounter_hysteresis_mm: 0.5
+  # encounter_gap_s: 0.5
+  # encounter_min_s: 0.5
+  # Wall-contact ring and the body ellipse used for exploration (mm).
+  # wall_zone_mm: 2.5
+  # fly_length_mm: 2.5
+  # fly_width_mm: 1.0
 tracking_regions:
   T_0:
     experimental_factors: Starved, Female

@@ -221,7 +221,11 @@ def test_render_all_writes_defaults_and_respects_specs_file(tmp_path):
     exp = _Exp(_summary(), tmp_path)
     written = pf.render_all(exp)
     names = sorted(os.path.basename(p) for p in written)
-    assert names == sorted(f"{pid}.svg" for pid in pf.PLOT_TYPES)
+    ## Every plot type the summary can draw — and only those: a two-choice
+    ## summary has no Paired Open Field metrics to plot.
+    drawable = pf.plot_types_for(exp.arena.summarize().columns)
+    assert names == sorted(f"{pid}.svg" for pid in drawable)
+    assert "faceted_pi" in drawable and "faceted_centrophobism" not in drawable
     assert all(os.path.exists(p) for p in written)
 
     # With a specs file, only the plots it defines are rendered.

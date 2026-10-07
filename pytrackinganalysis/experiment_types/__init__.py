@@ -8,6 +8,7 @@ base-class strategy).
 
 from .base import ExperimentType, sole_treatment
 from .custom import CustomExperimentType
+from .paired_open_field import PairedOpenFieldExperimentType
 from .registry import available_experiment_types, get_experiment_type
 from .valence import ValenceExperimentType
 
@@ -16,6 +17,7 @@ __all__ = [
     "sole_treatment",
     "CustomExperimentType",
     "ValenceExperimentType",
+    "PairedOpenFieldExperimentType",
     "get_experiment_type",
     "available_experiment_types",
 ]

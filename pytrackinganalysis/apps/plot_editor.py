@@ -566,6 +566,12 @@ class PlotEditorWindow(QMainWindow):
         self._data_cache.clear()
         self._specs = pf.load_project_specs(path)
         self._project_label.setText(label)
+        ## Offer only what this project's summaries can draw: a Valence
+        ## project has no centrophobism, a Paired Open Field project no PI,
+        ## and the interaction plots follow its own distances (ADR-0016).
+        columns = (self._facet_frame.columns if self._facet_frame is not None
+                   else self._experiment.arena.summarize().columns)
+        self._reload_plot_combo(pf.plot_types_for(columns))
         try:
             ui_settings.add_recent_project(path)
         except Exception:  # noqa: BLE001
@@ -612,7 +618,7 @@ class PlotEditorWindow(QMainWindow):
         if not self._loaded:
             return None
         if self._plot_id not in self._data_cache:
-            metric = pf.PLOT_TYPES[self._plot_id]["metric"]
+            metric = pf.plot_type(self._plot_id)["metric"]
             if self._project is not None:
                 windows, label_of = self._window_labels
                 self._data_cache[self._plot_id] = \
@@ -829,6 +835,22 @@ class PlotEditorWindow(QMainWindow):
         if self._loaded:
             self._save_timer.start()
 
+    def _reload_plot_combo(self, plot_types: dict) -> None:
+        """Repopulate the plot list, keeping the current plot if it is still
+        offered, else the first one."""
+        if not plot_types:
+            return  # nothing drawable: leave the list as it was
+        self._updating = True
+        try:
+            self.plot_combo.clear()
+            for plot_id, info in plot_types.items():
+                self.plot_combo.addItem(info["display"], plot_id)
+            index = self.plot_combo.findData(self._plot_id)
+            self.plot_combo.setCurrentIndex(max(index, 0))
+            self._plot_id = self.plot_combo.currentData()
+        finally:
+            self._updating = False
+
     def _on_plot_switched(self, _index: int) -> None:
         if self._updating:
             return
@@ -893,7 +915,7 @@ class PlotEditorWindow(QMainWindow):
         self.preview.setPixmap(pix)
         elapsed = time.monotonic() - start
         self.statusBar().showMessage(
-            f"{pf.PLOT_TYPES[self._plot_id]['display']} — {len(data)} points, "
+            f"{pf.plot_type(self._plot_id)['display']} — {len(data)} points, "
             f"rendered in {elapsed:.2f}s")
 
     # -------------------------------------------------------------- saves
@@ -961,7 +983,7 @@ class PlotEditorWindow(QMainWindow):
         self._schedule_render()
         self._schedule_save()
         self.statusBar().showMessage(
-            f"{pf.PLOT_TYPES[self._plot_id]['display']} reset to defaults")
+            f"{pf.plot_type(self._plot_id)['display']} reset to defaults")
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self._save_timer.stop()

@@ -48,6 +48,13 @@ def _merge_adjacent_runs(rle_df, column='group'):
 ## nothing ever set. Two copies of the rig table would have drifted; see
 ## Experiment._build_parameters and config_validation.RIG_ALIASES.
 
+def summarizes_pairs(parameters):
+    """True when summaries are built one row per Pair (ADR-0013): a pairwise
+    tracker. The pairwise counter already summarizes per region."""
+    return (parameters is not None and parameters.get_tracking_type()
+            == Parameters.TrackingType.PAIRWISEINTERACTIONTRACKER)
+
+
 class NoFacetData(ValueError):
     """A faceted plot was asked for but the faceted summary has no rows."""
 
@@ -360,10 +367,10 @@ class Arena:
                     x2, y2 = group.iloc[1][['X', 'Y']]
                     distance = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
                     rawdata.loc[group.index, 'ClosestNeighbor'] = distance
-            elif group['NObjects'].sum() == 2:
-                ## The two animals were resolved as a single blob: zero separation.
-                rawdata.loc[group.index, 'ClosestNeighbor'] = 0
-            # Anything else stays NaN — not a usable pair observation.
+            # Anything else stays NaN. A collapsed blob used to be written as
+            # distance 0 here, but only the pair's own context can say whether
+            # a lost frame is two flies touching; PairwiseInteractionTracker
+            # decides that once, for both paths (ADR-0014).
 
         return rawdata
         
@@ -442,7 +449,8 @@ class Arena:
             frames.append(tmp)
         return pd.concat(frames, ignore_index=True)
 
-    def summarize_facet(self,cutoffs=None,copy_to_clipboard=False, write_to_csvfile=False, remove_partners=False):
+    def summarize_facet(self,cutoffs=None,copy_to_clipboard=False, write_to_csvfile=False, remove_partners=False,
+                        per_fly=False):
         """
         Summarize data in facets.
 
@@ -452,12 +460,15 @@ class Arena:
         copy_to_clipboard (bool): Flag to copy results to clipboard.
         write_to_csvfile (bool): Flag to write results to CSV file.
         remove_partners (bool): Flag to remove partners from the summary. This is relevant for pairwise data where pairs may have identical values (e.g., interaction percentage).
+        per_fly (bool): For a pairwise tracker, one row per fly instead of per
+            Pair. See :meth:`summarize`.
 
         Returns:
         DataFrame: Summarized data.
         """
         all_summaries = self._over_facets(self.summarize, cutoffs,
-                                          remove_partners=remove_partners)
+                                          remove_partners=remove_partners,
+                                          per_fly=per_fly)
         if(copy_to_clipboard):
             all_summaries.to_clipboard(index=False, na_rep='NA')
         if(write_to_csvfile==True):
@@ -528,7 +539,37 @@ class Arena:
 
         return combined_df        
 
-    def summarize(self,range_minutes=(0,0),copy_to_clipboard=False, write_to_csvfile=False, remove_partners=False, include_excluded=False):
+    ## Summary columns that identify a row rather than measure anything.
+    _IDENTITY_COLUMNS = ('Treatment', 'Name', 'TrackingRegion', 'ObjectID')
+
+    def _summarizes_pairs(self):
+        return summarizes_pairs(getattr(self, 'parameters', None))
+
+    def _pair_rows(self, summary):
+        """Collapse per-fly rows into one row per Pair (ADR-0013).
+
+        Every measure is the mean over the Pair's flies: per-fly measures
+        (distance, activity, …) become the Pair's average, and pair measures
+        (interaction, distance between the flies), identical for both flies,
+        come through unchanged. A measure one fly lacks (NA) is the other's.
+        ``Name`` and ``TrackingRegion`` are both the region; ``ObjectID`` goes.
+        """
+        if len(summary) == 0 or 'TrackingRegion' not in summary.columns:
+            return summary.drop(columns=['ObjectID'], errors='ignore')
+        regions = summary['TrackingRegion'].astype(str).to_numpy()
+        measures = [c for c in summary.columns if c not in self._IDENTITY_COLUMNS]
+        ## pd.NA arrives in object columns for an empty window; coerce so the
+        ## mean sees NaN rather than refusing the column.
+        means = (summary[measures].apply(pd.to_numeric, errors='coerce')
+                 .groupby(regions, sort=False).mean())
+        identity = pd.DataFrame({'Name': means.index, 'TrackingRegion': means.index})
+        if 'Treatment' in summary.columns:
+            identity.insert(0, 'Treatment',
+                            summary['Treatment'].groupby(regions, sort=False).first().to_numpy())
+        return pd.concat([identity, means.reset_index(drop=True)], axis=1)
+
+    def summarize(self,range_minutes=(0,0),copy_to_clipboard=False, write_to_csvfile=False, remove_partners=False, include_excluded=False,
+                  per_fly=False):
         """
         Summarize data.
 
@@ -537,46 +578,43 @@ class Arena:
         copy_to_clipboard (bool): Flag to copy results to clipboard.
         write_to_csvfile (bool): Flag to write results to CSV file.
         remove_partners (bool): Flag to remove partners from the summary.This is relevant for pairwise data where pairs may have identical values (e.g., interaction percentage).
+            A pairwise *tracker* already returns one row per Pair, so this
+            only affects other types.
         include_excluded (bool): Keep rows for trackers named in
             ``set_excluded_trackers`` (ADR-0003). Only the exclusion audit
             itself should pass True; every analysis consumer gets the filtered
             population by default.
+        per_fly (bool): For a pairwise tracker, return one row per fly instead
+            of one per Pair (ADR-0013). For inspection only — the Pair is the
+            unit every statistic uses.
 
         Returns:
         DataFrame: Summarized data.
         """
-        ## Remember when returning partners we don't take shortcuts to avoid confustion.
         cache_key = tuple(range_minutes)
-        if(remove_partners==False):
-            if(cache_key in self.computed_summaries):
-                ## Hand out a copy: summarize_facet writes a FacetRange column
-                ## into whatever it gets back, which used to leak straight into
-                ## the cached flat summary and out again through the next
-                ## summarize(write_to_csvfile=True).
-                cached = self.computed_summaries[cache_key].copy()
-                return cached if include_excluded else self._drop_excluded(cached)
-
-
-        summaries = []
-        for key, tracker in self.trackers.items():
-            summary = tracker.summarize(range_minutes)
-            summaries.append(summary)
-    
-        # Concatenate all summaries into a single DataFrame
-        all_summaries = pd.DataFrame(summaries)
-        
-        if(remove_partners):
-            all_summaries = all_summaries.drop_duplicates(subset="TrackingRegion",keep="first")
-            all_summaries.reset_index(drop=True, inplace=True)
+        if cache_key in self.computed_summaries:
+            ## Hand out a copy: summarize_facet writes a FacetRange column
+            ## into whatever it gets back, which used to leak straight into
+            ## the cached flat summary and out again through the next
+            ## summarize(write_to_csvfile=True).
+            all_summaries = self.computed_summaries[cache_key].copy()
         else:
-            ## To avoid confusion, if we remove partners, we won't save a copy to speed things up.
+            all_summaries = pd.DataFrame(
+                [tracker.summarize(range_minutes) for tracker in self.trackers.values()])
             self.computed_summaries[cache_key] = all_summaries.copy()
 
-        ## The cache above stays unfiltered; excluded rows are dropped on the
-        ## way out so the clipboard/CSV outputs match what the plots and stats
-        ## see (ADR-0003).
+        ## The cache above stays unfiltered (one row per tracker); excluded rows
+        ## are dropped on the way out so the clipboard/CSV outputs match what
+        ## the plots and stats see (ADR-0003). Exclusion comes before pairing,
+        ## so a Pair is built only from flies still in the analysis.
         if not include_excluded:
             all_summaries = self._drop_excluded(all_summaries)
+
+        if self._summarizes_pairs() and not per_fly:
+            all_summaries = self._pair_rows(all_summaries)
+        elif remove_partners:
+            all_summaries = all_summaries.drop_duplicates(subset="TrackingRegion",keep="first")
+            all_summaries.reset_index(drop=True, inplace=True)
 
         ## Note that for the this function to work in linux, you need to install xclip or xsel (verified with xclip)
         if(copy_to_clipboard):

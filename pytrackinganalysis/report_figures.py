@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from . import Parameters
+from . import Parameters, removals
 from .report import model as m
 
 # One place for the report's plot look, so every figure reads as a set.
@@ -454,6 +454,18 @@ def build_faceted_figures(experiment) -> list[m.Figure]:
         "Mean polarity-adjusted X position in each phase, by treatment. Red "
         "point = group mean ± SEM.",
         ref=0.0)
+    _facet_figure(
+        "CentrophobismIndex", "Centrophobism Index", "Centrophobism by phase",
+        "Centrophobism Index over walking frames in each phase, by treatment: "
+        "P(periphery) − P(centre zone), 0 = uniform use (dashed), positive = "
+        "avoids the open centre. Red point = group mean ± SEM.",
+        ylim=(-1.05, 1.05), ref=0.0)
+    _facet_figure(
+        "ExplorationAUC", "Exploration AUC", "Exploration by phase",
+        "Mean share of the arena the body footprint had covered across each "
+        "phase, by treatment — higher means explored sooner. Red point = group "
+        "mean ± SEM.",
+        ylim=(-0.02, 1.02))
     for col in fsummary.columns:
         if col.startswith("PercentInteracting_"):
             dist = col.rsplit("_", 1)[-1]
@@ -754,18 +766,41 @@ def build_stats_table(experiment) -> list:
                 levels.append(m.Level.OK if significant else None)
     blocks = []
     if rows:
-        blocks.append(m.Table(
-            columns=["Metric", "Phase", "Group A", "Group B", "Mean diff (B − A)",
-                     "p-value", "Significant"],
-            rows=rows, row_levels=levels,
-            title="Statistical comparisons",
-            caption="Welch's t-test for two treatment levels, Tukey HSD for three "
-                    "or more; α = 0.05. P-values are per test — no multiplicity "
-                    "correction across phases or metrics. Full test output is in "
-                    "the _Stats.txt file."))
+        columns = ["Metric", "Phase", "Group A", "Group B", "Mean diff (B − A)",
+                   "p-value", "Significant"]
+        caption = ("Welch's t-test for two treatment levels, Tukey HSD for three "
+                   "or more; α = 0.05. P-values are per test — no multiplicity "
+                   "correction across phases or metrics. Full test output is in "
+                   "the _Stats.txt file.")
+        ## A type with a secondary tier says which results were designed to
+        ## carry weight (Metric Tier, ADR-0016); single-tier types read as before.
+        tier_of = _metric_tier_labels(experiment)
+        if tier_of:
+            columns.insert(1, "Tier")
+            rows = [[row[0], tier_of.get(row[0], "")] + row[1:] for row in rows]
+            caption += (" Primary metrics are the headline; secondary metrics "
+                        "are exploratory.")
+        blocks.append(m.Table(columns=columns, rows=rows, row_levels=levels,
+                              title="Statistical comparisons", caption=caption))
     if one_rows:
         blocks.append(indifference_table(one_rows, one_levels))
     return blocks
+
+
+def _metric_tier_labels(experiment) -> dict:
+    """``{metric: 'primary' | 'secondary'}`` when the experiment's tracking
+    type has a secondary tier, else ``{}``."""
+    from .Experiment import metric_tiers
+
+    params = getattr(experiment, "parameters", None)
+    if params is None:
+        return {}
+    primary, secondary = metric_tiers(params.get_tracking_type(),
+                                      params.interaction_distance_mm)
+    if not secondary:
+        return {}
+    return {**{mt: "primary" for mt in primary},
+            **{mt: "secondary" for mt in secondary}}
 
 
 def indifference_table(rows, row_levels, mixed: bool = False):
@@ -848,6 +883,346 @@ def build_valence_sections(experiment) -> list:
     return blocks
 
 
+def build_paired_open_field_sections(experiment) -> list:
+    """Paired Open Field report blocks (ADR-0016), in reading order: the
+    advisory flags and ROI Check, the Experiment-phase headline across the
+    primary metrics, then where the flies went (occupancy), how proximity
+    evolved, how fast they explored, and a thumbnail of every arena.
+
+    Defensive like the Valence builders: a section whose data cannot be
+    built is skipped, so thin data shortens the report instead of ending it.
+    """
+    blocks: list = []
+    for builder in (_pof_flags, _pof_headline, _pof_occupancy,
+                    _pof_interaction_over_time, _pof_coverage_curves,
+                    _pof_thumbnails):
+        try:
+            blocks += builder(experiment)
+        except Exception:  # noqa: BLE001
+            plt.close("all")
+    return blocks
+
+
+def _pof_pairs(experiment, include_excluded=False):
+    """``{region: [trackers]}`` for the Pairs in the analysis population (or
+    every Pair). Builders that read trackers directly must honour exclusions
+    themselves (ADR-0003)."""
+    arena = experiment.arena
+    excluded = set() if include_excluded else (getattr(arena, "excluded_names", set()) or set())
+    pairs: dict = {}
+    for name, tracker in arena.trackers.items():
+        if name not in excluded:
+            pairs.setdefault(tracker.get_tracking_region_id(), []).append(tracker)
+    return pairs
+
+
+def _pof_primary(experiment):
+    windows, labels = _facet_windows_and_labels(experiment)
+    if windows:
+        window, label = _primary_phase(windows, labels)
+        return window, label, f"{label} phase ({_phase_label(window)} min)"
+    return (0, 0), "whole recording", "whole recording"
+
+
+def _pof_flags(experiment) -> list:
+    """The advisory flags (Possibly-Dead, ROI Check) and the ROI Check table."""
+    flags = getattr(experiment, "advisory_flags", None)
+    if flags is None:
+        return []
+    blocks: list = []
+    descriptions = flags.attrs.get("descriptions", {})
+    if len(flags):
+        rows = [[str(r["Name"]), str(r["TrackingRegion"]), str(r["Treatment"]),
+                 str(r["Flag"]), str(r["Detail"])] for _, r in flags.iterrows()]
+        blocks.append(m.Table(
+            columns=["Fly / region", "Region", "Treatment", "Flag", "Detail"],
+            rows=rows, row_levels=[m.Level.WARN] * len(rows),
+            title="Advisory flags",
+            caption="Flagged flies and regions stay in every result. "
+                    + " ".join(f"{k}: {v}." for k, v in descriptions.items())))
+    else:
+        blocks.append(m.Paragraph(
+            "No advisory flags: no fly stayed in one spot through the end of the "
+            "recording, and every region's ROI matches where its flies went."))
+    roi = flags.attrs.get("roi_check")
+    if roi is not None and len(roi):
+        rows, levels = [], []
+        for _, r in roi.iterrows():
+            gap = r["ReachGap_mm"]
+            rows.append([str(r["TrackingRegion"]), str(r["Treatment"]),
+                         "no data" if pd.isna(gap) else f"{gap:+.2f}", str(r["Status"])])
+            levels.append(None if r["Status"] == "ok" else m.Level.WARN)
+        blocks.append(m.Table(
+            columns=["Region", "Treatment", "Reach gap (mm)", "ROI check"],
+            rows=rows, row_levels=levels, title="ROI check",
+            caption="How close the flies came to the ROI edge (0.5th percentile "
+                    "of distance to the wall). About +0.5 mm — half a fly's "
+                    "width — is a well-drawn ROI; centrophobism and exploration "
+                    "take the ROI as the wall."))
+    return blocks
+
+
+def _pof_primary_metrics(summary, distances):
+    """The primary metrics present, with their axis label, limits and reference."""
+    specs = [(f"PercentInteracting_{d}", f"Fraction of time < {d} mm", (-0.02, 1.02), None)
+             for d in distances]
+    specs += [("CentrophobismIndex", "Centrophobism Index", (-1.05, 1.05), 0.0),
+              ("ExplorationAUC", "Exploration AUC", (-0.02, 1.02), None),
+              ("TotalDistancePerMin", "Movement (mm/min)", None, None)]
+    return [s for s in specs if s[0] in summary.columns]
+
+
+def _pof_headline(experiment) -> list:
+    """The primary metrics in the Primary Phase: one panel each, per Pair."""
+    window, _label, where = _pof_primary(experiment)
+    summary = experiment.arena.summarize(range_minutes=window)
+    treatments = _treatments(summary)
+    if not treatments:
+        return []
+    specs = _pof_primary_metrics(summary, experiment.parameters.interaction_distance_mm)
+    if not specs:
+        return []
+    ncols = min(3, len(specs))
+    nrows = int(np.ceil(len(specs) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.4 * ncols, 3.6 * nrows),
+                             squeeze=False)
+    for ax, (metric, ylabel, ylim, ref) in zip(axes.flat, specs):
+        _strip_panel(ax, summary, metric, treatments, ylabel, ylim=ylim, ref_line=ref)
+        ax.set_title(metric, fontsize=9, color=_INK)
+    for ax in list(axes.flat)[len(specs):]:
+        ax.set_visible(False)
+    fig.tight_layout()
+    blocks = [_fig_to_block(
+        fig, title="Headline results",
+        caption=f"Primary metrics during the {where}, one point per Pair "
+                "(per-fly measures averaged across the Pair). Red bar = group "
+                "mean ± SEM. Centrophobism Index: dashed line = uniform use of "
+                "the arena; positive = avoids the centre. Proximity is not "
+                "corrected for chance — read it beside centrophobism.")]
+    for metric, *_ in specs:
+        table = _pairwise_table(summary, metric, treatments, where)
+        if table is not None:
+            blocks.append(table)
+    return blocks
+
+
+def _pof_occupancy(experiment) -> list:
+    """Pooled position density per treatment, in normalised arena coordinates
+    (location multipliers applied) with the centre-zone boundary drawn."""
+    from . import openfield
+
+    window, _label, where = _pof_primary(experiment)
+    bins = 40
+    density: dict = {}
+    shape = None
+    for _region, trackers in _pof_pairs(experiment).items():
+        for tracker in trackers:
+            geometry = tracker.arena_geometry()
+            treat = str(tracker.get_treatment() or "").strip()
+            if geometry is None or not treat:
+                continue
+            shape = shape or geometry.shape
+            data = tracker.get_data_subset(window)
+            data = data[data["DataQuality"] == "High"]
+            design = tracker.tracking_region_design
+            xm = int(design["XLocationMultiplier"].iloc[0]) if design is not None else 1
+            ym = int(design["YLocationMultiplier"].iloc[0]) if design is not None else 1
+            u = data["Xpos_mm"].to_numpy() * xm / geometry.half_width
+            v = data["Ypos_mm"].to_numpy() * ym / geometry.half_height
+            h, _, _ = np.histogram2d(u, v, bins=bins, range=[[-1, 1], [-1, 1]])
+            density[treat] = density.get(treat, 0) + h
+    if not density:
+        return []
+    treatments = list(density)
+    fig, axes = plt.subplots(1, len(treatments), figsize=(3.2 * len(treatments), 3.4),
+                             squeeze=False)
+    import matplotlib.patches as mpatches
+    for ax, treat in zip(axes[0], treatments):
+        h = density[treat]
+        ax.imshow((h / h.sum()).T if h.sum() else h.T, origin="lower",
+                  extent=(-1, 1, -1, 1), cmap="magma", interpolation="nearest")
+        r = openfield.CENTER_ZONE_RHO
+        patch = (mpatches.Circle((0, 0), r, fill=False) if shape == "Ellipse"
+                 else mpatches.Rectangle((-r, -r), 2 * r, 2 * r, fill=False))
+        patch.set_edgecolor("#e2e8f0")
+        patch.set_linestyle("--")
+        patch.set_linewidth(0.9)
+        ax.add_patch(patch)
+        ax.set_title(treat, fontsize=9, color=_INK)
+        ax.set_xticks([])
+        ax.set_yticks([])
+    fig.tight_layout()
+    return [_fig_to_block(
+        fig, title="Where the flies spent their time",
+        caption=f"Position density pooled over each treatment's flies during the "
+                f"{where}, in arena coordinates scaled to the ROI (mirrored "
+                "wells flipped). Dashed line: the centre zone, which holds half "
+                "the arena's area.")]
+
+
+def _pof_interaction_over_time(experiment) -> list:
+    """Sliding-window proximity per treatment, one panel per threshold."""
+    distances = list(experiment.parameters.interaction_distance_mm)
+    # treatment -> distance -> window end -> per-Pair values
+    series: dict = {}
+    for _region, trackers in _pof_pairs(experiment).items():
+        tracker = trackers[0]          # pair measures are the Pair's, not the fly's
+        treat = str(tracker.get_treatment() or "").strip()
+        if not treat:
+            continue
+        td = tracker.get_time_dependent_interactions(_PI_WINDOW_MIN, _PI_STEP_MIN)
+        for d in distances:
+            col = f"PercentInteractions_{d}"
+            if col not in td.columns:
+                continue
+            for end, value in zip(td["EndMin"], td[col]):
+                if pd.notna(value):     # a window with no valid frame says nothing
+                    series.setdefault(treat, {}).setdefault(d, {}).setdefault(
+                        float(end), []).append(float(value))
+    if not series:
+        return []
+    fig, axes = plt.subplots(1, len(distances), figsize=(3.6 * len(distances), 3.4),
+                             squeeze=False, sharey=True)
+    for ax, d in zip(axes[0], distances):
+        _style_ax(ax)
+        for i, (treat, per_d) in enumerate(series.items()):
+            per_end = per_d.get(d, {})
+            if not per_end:
+                continue
+            ends = sorted(per_end)
+            means = np.array([np.mean(per_end[e]) for e in ends])
+            sems = np.array([_sem(per_end[e]) for e in ends])
+            color = _TREAT_PALETTE[i % len(_TREAT_PALETTE)]
+            ax.plot(ends, means, color=color, linewidth=1.6, label=treat)
+            ax.fill_between(ends, means - sems, means + sems, color=color,
+                            alpha=0.15, linewidth=0)
+        for cutoff in (getattr(experiment, "facet_cutoffs", None) or []):
+            ax.axvline(float(cutoff), color="#cbd5e1", linewidth=0.9)
+        ax.set_ylim(-0.02, 1.02)
+        ax.set_title(f"< {d} mm", fontsize=9, color=_INK)
+        ax.set_xlabel("Minutes", fontsize=8, color=_INK)
+    axes[0][0].set_ylabel("Fraction of time", fontsize=9, color=_INK)
+    axes[0][-1].legend(fontsize=7, frameon=False, loc="upper right")
+    fig.tight_layout()
+    return [_fig_to_block(
+        fig, title="Proximity over time",
+        caption=f"Sliding-window fraction of tracked time within each interaction "
+                f"distance (window {_PI_WINDOW_MIN} min, step {_PI_STEP_MIN} min), "
+                "mean ± SEM over Pairs. Vertical lines mark phase boundaries.")]
+
+
+def _pof_coverage_curves(experiment) -> list:
+    """Coverage against time within each phase, mean ± SEM over Pairs."""
+    windows, labels = _facet_windows_and_labels(experiment)
+    if not windows:
+        windows, labels = [(0, 0)], ["Whole recording"]
+    pairs = _pof_pairs(experiment)
+    fig, axes = plt.subplots(1, len(windows), figsize=(3.6 * len(windows), 3.4),
+                             squeeze=False, sharey=True)
+    drew = False
+    for ax, window, label in zip(axes[0], windows, labels):
+        _style_ax(ax)
+        curves: dict = {}
+        for _region, trackers in pairs.items():
+            per_fly = [t.get_coverage_curve(window) for t in trackers]
+            per_fly = [c for c in per_fly if c is not None]
+            if not per_fly:
+                continue
+            treat = str(trackers[0].get_treatment() or "").strip()
+            elapsed = per_fly[0][0]
+            pair_curve = np.nanmean([c[1] for c in per_fly], axis=0)
+            curves.setdefault(treat, []).append((elapsed, pair_curve))
+        for i, (treat, items) in enumerate(curves.items()):
+            if not treat:
+                continue
+            ## Pairs share the window, so their elapsed grids agree to within
+            ## a frame; resample onto the shortest for a common axis.
+            span = min(e[-1] for e, _ in items)
+            grid = np.linspace(0, span, 60)
+            stack = np.array([np.interp(grid, e, c) for e, c in items])
+            mean = stack.mean(axis=0)
+            sem = (stack.std(axis=0, ddof=1) / np.sqrt(len(stack))
+                   if len(stack) > 1 else np.zeros_like(mean))
+            color = _TREAT_PALETTE[i % len(_TREAT_PALETTE)]
+            ax.plot(grid, mean, color=color, linewidth=1.6,
+                    label=f"{treat} (n={len(stack)})")
+            ax.fill_between(grid, mean - sem, mean + sem, color=color,
+                            alpha=0.15, linewidth=0)
+            drew = True
+        ax.set_ylim(-0.02, 1.02)
+        ax.set_title(label, fontsize=9, color=_INK)
+        ax.set_xlabel("Minutes into phase", fontsize=8, color=_INK)
+        if curves:
+            ax.legend(fontsize=7, frameon=False, loc="lower right")
+        else:
+            ax.text(0.5, 0.5, "no data in this phase", ha="center", va="center",
+                    fontsize=8, color=_MUTED, transform=ax.transAxes)
+    axes[0][0].set_ylabel("Share of arena explored", fontsize=9, color=_INK)
+    if not drew:
+        plt.close(fig)
+        return []
+    fig.tight_layout()
+    return [_fig_to_block(
+        fig, title="Exploration",
+        caption="Share of the arena the flies' bodies had touched, against time "
+                "within each phase (each Pair's two flies averaged), mean ± SEM "
+                "over Pairs. ExplorationAUC is the mean height of each curve.")]
+
+
+def _pof_thumbnails(experiment) -> list:
+    """Every arena's two paths over its ROI outline — a QC view for dead or
+    stuck flies and mis-drawn ROIs. Excluded and flagged regions are marked."""
+    import matplotlib.patches as mpatches
+
+    pairs = _pof_pairs(experiment, include_excluded=True)
+    if not pairs:
+        return []
+    excluded = getattr(experiment.arena, "excluded_names", set()) or set()
+    flags = getattr(experiment, "advisory_flags", None)
+    flagged_regions = set(flags["TrackingRegion"].astype(str)) \
+        if flags is not None and len(flags) else set()
+    regions = list(pairs)
+    ncols = min(6, len(regions))
+    nrows = int(np.ceil(len(regions) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(1.7 * ncols, 1.85 * nrows),
+                             squeeze=False)
+    for ax, region in zip(axes.flat, regions):
+        trackers = pairs[region]
+        geometry = trackers[0].arena_geometry()
+        for j, tracker in enumerate(trackers):
+            data = tracker.rawdata[tracker.rawdata["DataQuality"] == "High"]
+            step = max(1, len(data) // 3000)
+            ax.plot(data["Xpos_mm"].to_numpy()[::step], data["Ypos_mm"].to_numpy()[::step],
+                    linewidth=0.3, alpha=0.7,
+                    color=_TREAT_PALETTE[j % len(_TREAT_PALETTE)])
+        if geometry is not None:
+            a, b = geometry.half_width, geometry.half_height
+            outline = (mpatches.Ellipse((0, 0), 2 * a, 2 * b, fill=False)
+                       if geometry.shape == "Ellipse"
+                       else mpatches.Rectangle((-a, -b), 2 * a, 2 * b, fill=False))
+            outline.set_edgecolor("#94a3b8")
+            outline.set_linewidth(0.6)
+            ax.add_patch(outline)
+            ax.set_xlim(-a * 1.05, a * 1.05)
+            ax.set_ylim(b * 1.05, -b * 1.05)   # image coordinates: y down
+        ax.set_aspect("equal")
+        ax.set_xticks([])
+        ax.set_yticks([])
+        is_excluded = all(t.name in excluded for t in trackers)
+        note = " · excluded" if is_excluded else (" · flagged" if region in flagged_regions else "")
+        treat = str(trackers[0].get_treatment() or "").strip()
+        ax.set_title(f"{region} {treat}{note}", fontsize=6,
+                     color=_MEAN_COLOR if note else _INK)
+    for ax in list(axes.flat)[len(regions):]:
+        ax.set_visible(False)
+    fig.tight_layout()
+    return [_fig_to_block(
+        fig, title="Every arena",
+        caption="Both flies' tracked paths over the whole recording (one colour "
+                "per fly) inside the ROI outline. Red titles mark regions "
+                "excluded from the analysis or carrying an advisory flag.")]
+
+
 def _valence_movement_flags(experiment) -> list:
     """Accounting for the Low-Movement Flag: flies below the movement
     threshold during the first phase are listed as potentially an issue —
@@ -920,7 +1295,7 @@ def build_exclusion_blocks(experiment) -> list:
     threshold = attrs.get("min_transitions")
     phase = attrs.get("phase_label", "Primary")
     n_removed = attrs.get("n_removed", 0)
-    n_low = attrs.get("n_low_transitions", 0)
+    n_low = removals.policy_count(attrs)
     unmatched = list(attrs.get("unmatched_regions", []))
 
     def footnotes() -> list:
@@ -930,7 +1305,10 @@ def build_exclusion_blocks(experiment) -> list:
             for region in unmatched]
 
     if len(excluded) == 0:
-        if threshold:
+        if attrs.get("policy_none"):
+            text = (f"No flies were excluded: {attrs['policy_none']}. Every "
+                    f"fly is included in the results below.")
+        elif threshold:
             text = (f"No flies were excluded: every fly made at least "
                     f"{threshold} transitions during the {phase} phase "
                     f"(min_transitions = {threshold}), and no regions were "
@@ -948,16 +1326,18 @@ def build_exclusion_blocks(experiment) -> list:
     if n_removed:
         causes.append(f"{n_removed} removed by the experimenter")
     if n_low:
-        causes.append(f"{n_low} with fewer than {threshold} transitions during "
-                      f"the {phase} phase")
+        causes.append(f"{n_low} {removals.policy_cause(attrs)}")
     lead = (f"{len(excluded)} fly(ies) were excluded from all figures, summary "
             f"measures, statistics, and data files: {'; '.join(causes)}. "
             f"See the _Excluded.csv output.")
 
     has_transitions = "Transitions" in excluded.columns
+    has_valid = "ValidFraction" in excluded.columns
     columns = ["Fly", "Region", "Treatment"]
     if has_transitions:
         columns.append(f"Transitions ({phase})")
+    if has_valid:
+        columns.append(f"Valid tracking ({phase})")
     columns.append("Reason")
     rows = []
     for _, row in excluded.iterrows():
@@ -968,6 +1348,10 @@ def build_exclusion_blocks(experiment) -> list:
             t = pd.to_numeric(pd.Series([row.get("Transitions")]),
                               errors="coerce").iloc[0]
             cells.append("no data" if pd.isna(t) else f"{t:g}")
+        if has_valid:
+            v = pd.to_numeric(pd.Series([row.get("ValidFraction")]),
+                              errors="coerce").iloc[0]
+            cells.append("no data" if pd.isna(v) else f"{v:.0%}")
         cells.append(str(row.get("Reason", "")))
         rows.append(cells)
     caption = ("Why each fly left the analysis population; a reason naming "

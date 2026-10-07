@@ -398,6 +398,7 @@ global:
 | Value | What it fixes |
 |-------|---------------|
 | `Valence` | Two-choice light-preference assay. Tracking type `TWOCHOICETRACKER`; **Light/NoLight** counting regions (in that order, so positive PI = light-preference); phases **Acclimation (0–10) / Experiment (10–70) / Cooldown (70+)**; rig must be `arena_max` (36 regions, `T_0`–`T_35`), `colosseum` (24 regions, `T_0`–`T_23`), or `small_arena` (6 regions, `T_0`–`T_5`, one 6-well unit per recording); calibration from the rig preset only. |
+| `PairedOpenField` | Two flies of the same treatment per region of an open arena: social behaviour (proximity, Encounters) plus general health and behaviour (movement, walking, centrophobism, exploration). Tracking type `PAIRWISEINTERACTIONTRACKER`; the **Pair** is the unit of every result; phases **Acclimation / Experiment / Cooldown** (10, 70 by default); rig `small_arena`, `arena_max`, `colosseum` (preset calibration only) or `movie` (`fps` and `mm_per_pixel` required); regions are whatever the data holds; interaction distances default to `[4, 8, 10]` mm. See §4.1.1 and `docs/adr/0013`–`0016`. |
 
 For a type whose plate is fixed by the rig (like Valence), the Config Editor
 lays out the exact tracking regions when you choose the rig — 36 rows for Arena
@@ -463,6 +464,53 @@ treatment (already done for you when the design has only one — §4.2) and drop
 the DTrack export into `data/`. You can also pick the
 Experiment Type from the dropdown at the top of the Config Editor's **Global**
 tab. See `docs/adr/0001` and `0002`.
+
+#### 4.1.1 Paired Open Field
+
+Every pairwise-tracker experiment (typed or Custom) measures, for each Pair and
+each phase:
+
+- **Social behaviour** — `PercentInteracting_<d>`: the fraction of tracked time
+  the two flies spent within `d` mm. Frames where the flies touched and DTrack
+  merged them into one blob count as contact (a lost run bracketed on both
+  sides by distances under `merge_distance_mm`, default 3 mm); `MergedFraction`
+  says how much of the time that was. **Encounters** below each `d` — bouts
+  with 0.5 mm hysteresis, gaps under 0.5 s bridged, at least 0.5 s long — as
+  `EncounterRate_<d>` (per minute), `MeanEncounterDuration_<d>` (s) and
+  `LatencyToFirstEncounter_<d>` (min). Proximity is **not corrected for
+  chance**: two flies that both follow the wall meet more often, so read it
+  beside the Centrophobism Index.
+- **Centrophobism** — `CentrophobismIndex`, −1..+1 over walking frames:
+  P(periphery) − P(centre zone), where the centre zone is the scaled copy of
+  the ROI holding half its area. 0 = uniform use, positive = avoids the open
+  centre. Also `CentrophobismIndexAllFrames`, `WallZoneFraction` (time within
+  `wall_zone_mm`, default 2.5 mm, of the wall) and `MeanWallDistance_mm`. The
+  **ROI as drawn in DTrack is the wall** — draw it on the arena's edge.
+- **Exploration** — the share of the arena the fly's body (an ellipse
+  `fly_length_mm` × `fly_width_mm`, default 2.5 × 1.0, swept along its path)
+  touched: `ExploredFraction` (plus `…Center`, `…Periphery`), `ExplorationAUC`
+  (mean coverage over the phase — higher means explored sooner) and
+  `TimeTo50PctExplored`.
+- **Walking** — `WalkingSpeed_mm_s` (speed while walking), `WalkingBoutsPerMin`,
+  `MeanWalkingBoutDuration_s`, beside the usual distance and activity budget.
+
+A **Paired Open Field** experiment adds:
+
+- **Low-tracking exclusion** (`min_valid_fraction`, default 0.8): a Pair whose
+  two flies were both tracked — or merged — for under this fraction of the
+  primary phase is excluded, both flies. `0` turns it off.
+- **Possibly-dead flag** (advisory): a fly that stayed within one body length
+  of one spot over the final 20 minutes. It stays in every result; declare the
+  region removed (§9) if it really died. Marked by a `PossiblyDeadFlag` column.
+- **ROI check** (advisory): `ReachGap_mm`, how close the flies came to the ROI
+  edge; more than 1 mm off either way flags the region (`ROICheckFlag`).
+- **Metric tiers**: the primary metrics (`PercentInteracting_<d>`,
+  `CentrophobismIndex`, `ExplorationAUC`, `TotalDistancePerMin`) are the
+  headline; the secondary ones (Encounters, walking, explored fractions) are
+  tested too but labelled exploratory. P-values are uncorrected throughout.
+- A report led by the flags and ROI check, the primary metrics in the
+  Experiment phase, occupancy heatmaps, proximity over time, exploration
+  curves and a thumbnail of every arena.
 
 The rest of §4.1 describes the fields a **Custom** experiment sets directly.
 
@@ -578,14 +626,29 @@ global:
 
   # Distance thresholds (mm) for interaction detection.
   # Only used with PAIRWISEINTERACTIONTRACKER / PAIRWISEINTERACTIONCOUNTER.
+  # Default: [8], or [4, 8, 10] for a Paired Open Field experiment.
   interaction_distances: [8]
+
+  # Pairwise trackers only (§4.1.1). A lost run bracketed by distances under
+  # merge_distance_mm is the two flies touching (0 = never infer a merge).
+  merge_distance_mm: 3
+  # Encounters: hysteresis above the threshold, gaps bridged, minimum length.
+  encounter_hysteresis_mm: 0.5
+  encounter_gap_s: 0.5
+  encounter_min_s: 0.5
+  # Wall-contact ring, and the body ellipse used for exploration.
+  wall_zone_mm: 2.5
+  fly_length_mm: 2.5
+  fly_width_mm: 1.0
 ```
 
 **How overrides are interpreted:** the rig preset is applied first, then any of
 the recognized parameter keys present in `global:` override the preset value.
 Exactly these keys are recognized as overrides — `fps`, `mm_per_pixel`,
 `speed_window_seconds`, `micromove_speed_mm_sec`, `walking_speed_mm_sec`,
-`sleep_threshold_min`, `interaction_distances`.  Any other key in `global:` is
+`sleep_threshold_min`, `interaction_distances`, `merge_distance_mm`,
+`encounter_hysteresis_mm`, `encounter_gap_s`, `encounter_min_s`,
+`wall_zone_mm`, `fly_length_mm`, `fly_width_mm`.  Any other key in `global:` is
 carried along but ignored by the parameter system, so a typo like
 `walking_speed` will not error — it simply won't take effect.
 
@@ -1264,9 +1327,10 @@ outputs to the Project root — see the last table below).
 | File | Contents |
 |------|----------|
 | `*_experiment_summary.txt` | Rig settings, parameters, a formatted description of the experimental design (factors, region assignments, non-unit multipliers, counting regions, cutoffs), data quality overview, per-tracker table |
-| `*_Summary.csv` | Per-tracker summary statistics (one row per tracker). For Valence, a `LowMovementFlag` column marks flies flagged by the low-movement check (they remain in the data) |
+| `*_Summary.csv` | Per-tracker summary statistics (one row per tracker) — for a pairwise tracker, **one row per Pair**, each fly's own measures averaged across the Pair (`docs/adr/0013`). For Valence, a `LowMovementFlag` column marks flies flagged by the low-movement check (they remain in the data); for Paired Open Field, `PossiblyDeadFlag` and `ROICheckFlag` |
 | `*_Summary_Facet.csv` | Same, split into the time phases defined by `facet_cutoffs` |
-| `*_Excluded.csv` | Every fly left out of the analysis — name, region, treatment, transition count in the primary phase (Valence), and a `Reason`: your own removal (`Removed: dead at ~20 min`), the low-transition criterion, or both on one row. Written even when no fly was excluded, so absence never needs interpreting |
+| `*_Summary_PerFly.csv`, `*_Summary_Facet_PerFly.csv` | Pairwise trackers only: the same summaries one row per fly, for inspection. Nothing statistical reads them — the Pair is the unit |
+| `*_Excluded.csv` | Every fly left out of the analysis — name, region, treatment, transition count in the primary phase (Valence) or valid-tracking fraction (Paired Open Field), and a `Reason`: your own removal (`Removed: dead at ~20 min`), the type's criterion (`Low transitions`, `Low tracking`), or both on one row. Written even when no fly was excluded, so absence never needs interpreting |
 | `*_Stats.txt` | Pairwise statistical comparisons across treatment groups: independent two-sample **Welch's** t-test (unequal variance) when there are exactly two treatment levels, Tukey HSD when there are three or more. Each line carries both groups' N, mean and SD, and any trackers dropped for having no numeric value in the window are counted explicitly. Faceted runs append a note stating how many uncorrected tests were run and the Bonferroni-adjusted threshold. Pass `equal_var=True` to `run_pairwise_comparisons` for the classic Student's test. With a **single treatment level** there is no pair to compare, so `FinalPI` and `FinalPercentage` are each **tested against indifference** — PI against 0, Percentage against 0.5 (50%) — with a two-sided one-sample t-test per phase ("Test against indifference" blocks); other metrics stay *Not applicable*. A phase whose values are all identical has no spread to test, and the file says so. |
 | `*_plot_*.png` | One PNG per plot type, named after the plot method |
 | `*_AI_Summary.txt` | (Optional) The saved AI Summary; provenance (provider, model, date) on the first line. The report embeds it while this file exists; **every `run_analysis()` deletes it** so it can never describe a stale run |
@@ -2023,7 +2087,12 @@ unchanged.
 | Micro-movement range | 0.2 – 2 mm/s | `micromove_speed_mm_sec` |
 | Walking threshold | 2 mm/s | `walking_speed_mm_sec` |
 | Sleep threshold | 5 min continuous rest | `sleep_threshold_min` |
-| Interaction distance | 8 mm | `interaction_distances` |
+| Interaction distance | 8 mm (Paired Open Field: 4, 8, 10 mm) | `interaction_distances` |
+| Merge distance (pairwise) | 3 mm | `merge_distance_mm` |
+| Encounter hysteresis / gap / minimum | 0.5 mm / 0.5 s / 0.5 s | `encounter_hysteresis_mm`, `encounter_gap_s`, `encounter_min_s` |
+| Wall zone | 2.5 mm | `wall_zone_mm` |
+| Fly body (exploration footprint) | 2.5 × 1.0 mm | `fly_length_mm`, `fly_width_mm` |
+| Low-tracking exclusion (Paired Open Field) | 0.8 of the primary phase | `min_valid_fraction` |
 
 ### Environment commands
 

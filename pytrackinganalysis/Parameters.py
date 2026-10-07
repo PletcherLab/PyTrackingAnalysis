@@ -69,6 +69,25 @@ class Parameters:
         self.sleep_threshold_min = sleep_threshold_min
         self.tracking_details = TrackingTypeDetails(tracking_type)
         self.interaction_distance_mm = [8]
+        self.set_pairwise_defaults()
+
+    def set_pairwise_defaults(self):
+        """Pair-proximity and open-field settings (ADR-0014, ADR-0015).
+
+        Separate from the rig presets: these describe the flies and the
+        measures, not the camera, so no rig changes them.
+        """
+        ## A lost run bracketed by distances below this is two flies touching.
+        self.merge_distance_mm = 3.0
+        ## An Encounter ends only this far above its threshold, survives breaks
+        ## shorter than encounter_gap_s, and must last encounter_min_s.
+        self.encounter_hysteresis_mm = 0.5
+        self.encounter_gap_s = 0.5
+        self.encounter_min_s = 0.5
+        ## Absolute wall-contact ring, and the body ellipse used for exploration.
+        self.wall_zone_mm = 2.5
+        self.fly_length_mm = 2.5
+        self.fly_width_mm = 1.0
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -180,7 +199,19 @@ class Parameters:
     def set(self, tracking_type=None, fps=None, mm_per_pixel=None,
             speed_window_seconds=None, micromove_speed_mm_sec=None,
             walking_speed_mm_sec=None, sleep_threshold_min=None,
-            interaction_distances=None):
+            interaction_distances=None, merge_distance_mm=None,
+            encounter_hysteresis_mm=None, encounter_gap_s=None,
+            encounter_min_s=None, wall_zone_mm=None, fly_length_mm=None,
+            fly_width_mm=None):
+        for name, value in (('merge_distance_mm', merge_distance_mm),
+                            ('encounter_hysteresis_mm', encounter_hysteresis_mm),
+                            ('encounter_gap_s', encounter_gap_s),
+                            ('encounter_min_s', encounter_min_s),
+                            ('wall_zone_mm', wall_zone_mm),
+                            ('fly_length_mm', fly_length_mm),
+                            ('fly_width_mm', fly_width_mm)):
+            if value is not None:
+                setattr(self, name, float(value))
         if tracking_type is not None:
             self.set_tracking_type(tracking_type)
         if fps is not None:
@@ -215,7 +246,14 @@ class Parameters:
             f"micromove_speed_mm_sec: {self.micro_move_speed_mm_sec}\n"
             f"walking_speed_mm_sec: {self.walking_speed_mm_sec}\n"
             f"sleep_threshold_min: {self.sleep_threshold_min}\n"
-            f"interaction_distances: {self.interaction_distance_mm}"
+            f"interaction_distances: {self.interaction_distance_mm}\n"
+            f"merge_distance_mm: {self.merge_distance_mm}\n"
+            f"encounter_hysteresis_mm: {self.encounter_hysteresis_mm}\n"
+            f"encounter_gap_s: {self.encounter_gap_s}\n"
+            f"encounter_min_s: {self.encounter_min_s}\n"
+            f"wall_zone_mm: {self.wall_zone_mm}\n"
+            f"fly_length_mm: {self.fly_length_mm}\n"
+            f"fly_width_mm: {self.fly_width_mm}"
         )
 
 

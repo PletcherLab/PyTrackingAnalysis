@@ -69,6 +69,10 @@ class ExperimentType:
     required_counting_regions: tuple[str, ...] | None = None
     #: Whether the user may override fps / mm_per_pixel (False = rig preset only).
     allow_calibration_override: bool = True
+    #: Rigs whose calibration the user supplies even when
+    #: ``allow_calibration_override`` is False — a rig with no preset (Movie)
+    #: cannot take its calibration from one (ADR-0016).
+    calibration_override_rigs: tuple[str, ...] = ()
     #: For a type whose plate is fixed by the rig, the tracking-region count
     #: per canonical rig name, e.g. ``{"arena_max": 36}``. A rig that is run
     #: in more than one plate size gives a tuple instead, DEFAULT FIRST — the
@@ -85,6 +89,13 @@ class ExperimentType:
     #: ``min_movement`` is reported as potentially an issue — never removed.
     #: yaml-overridable; 0 = off; ``None`` = the type has no such flag.
     default_min_movement: float | None = None
+    #: ``global:`` parameter defaults the type supplies when the yaml omits
+    #: them (e.g. Paired Open Field's interaction distances). The yaml wins.
+    parameter_defaults: dict = {}
+    #: Default for the Low-Tracking Exclusion (ADR-0016): a Pair whose valid
+    #: frames are under this fraction of the Primary Phase is excluded.
+    #: yaml ``min_valid_fraction`` overrides; 0 = off; ``None`` = no criterion.
+    default_min_valid_fraction: float | None = None
 
     # ---- identity -----------------------------------------------------
 
@@ -154,6 +165,25 @@ class ExperimentType:
         ``None`` when the type has no such flag. Base/Custom: none."""
         return None
 
+    def resolve_min_valid_fraction(self, global_cfg: dict) -> float | None:
+        """The effective Low-Tracking Exclusion threshold, or ``None`` when the
+        type has no such criterion. The yaml wins; 0 disables it."""
+        if self.default_min_valid_fraction is None:
+            return None
+        raw = (global_cfg or {}).get("min_valid_fraction")
+        if raw is None:
+            return float(self.default_min_valid_fraction)
+        return float(raw)
+
+    def compute_advisory_flags(self, experiment):
+        """Advisory flags beyond the Low-Movement Flag — reported, never
+        removing anything — as a DataFrame of ``Name, TrackingRegion,
+        Treatment, Flag, Level, Detail`` rows (``Level`` is ``fly`` or
+        ``region``: what the flag is about), or ``None`` when the type raises
+        none. Each distinct ``Flag`` becomes a ``<Flag>Flag`` column in the
+        summary CSVs. Base/Custom: none."""
+        return None
+
     def region_counts_for_rig(self, rig) -> tuple[int, ...]:
         """Every tracking-region count *rig* may be run with, default first.
 
@@ -204,14 +234,20 @@ class ExperimentType:
         have = list(names or [])
         return any(have == [f"T_{i}" for i in range(n)] for n in counts)
 
-    def owned_keys(self) -> set[str]:
-        """``global:`` keys the type owns — the user must not set them."""
+    def calibration_overridable(self, rig=None) -> bool:
+        """Whether ``fps`` / ``mm_per_pixel`` may be set in the yaml for *rig*."""
+        return (self.allow_calibration_override
+                or config_validation.normalize_rig(rig) in self.calibration_override_rigs)
+
+    def owned_keys(self, rig=None) -> set[str]:
+        """``global:`` keys the type owns — the user must not set them. The
+        calibration keys depend on *rig* for a type that locks only presets."""
         owned: set[str] = set()
         if self.tracking_type is not None:
             owned.add("tracking_type")
         if self.facets_fixed:
             owned.add("facet_cutoffs")
-        if not self.allow_calibration_override:
+        if not self.calibration_overridable(rig):
             owned |= {"fps", "mm_per_pixel"}
         return owned
 
@@ -393,7 +429,7 @@ class ExperimentType:
                 problems.append(
                     f"{self.display_name}: facets are fixed to "
                     f"{list(self.facet_cutoffs)}; remove 'facet_cutoffs'.")
-        if not self.allow_calibration_override:
+        if not self.calibration_overridable(global_cfg.get("tracking_rig")):
             for key in ("fps", "mm_per_pixel"):
                 if global_cfg.get(key) is not None:
                     problems.append(

@@ -40,6 +40,19 @@ _NUMERIC_GLOBALS = (
     ('speed_window_seconds', True),
     ('walking_speed_mm_sec', False),
     ('sleep_threshold_min', False),
+    ('wall_zone_mm', True),
+    ('fly_length_mm', True),
+    ('fly_width_mm', True),
+)
+
+## Pair-proximity settings where 0 is meaningful (it switches the behaviour
+## off — no merges inferred, no hysteresis, no bridging) but a negative value
+## is not.
+_NONNEGATIVE_GLOBALS = (
+    'merge_distance_mm',
+    'encounter_hysteresis_mm',
+    'encounter_gap_s',
+    'encounter_min_s',
 )
 
 
@@ -114,6 +127,20 @@ def validate_config(config) -> list[str]:
             problems.append(f"global.{key} must be a number, not {value!r}.")
         elif must_be_positive and value <= 0:
             problems.append(f"global.{key} must be greater than zero.")
+
+    for key in _NONNEGATIVE_GLOBALS:
+        value = global_cfg.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            problems.append(f"global.{key} must be a number, not {value!r}.")
+        elif value < 0:
+            problems.append(f"global.{key} must be zero or more.")
+
+    length, width = global_cfg.get('fly_length_mm'), global_cfg.get('fly_width_mm')
+    if all(isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
+           for v in (length, width)) and width > length:
+        problems.append("global.fly_width_mm must not exceed fly_length_mm.")
 
     micromove = global_cfg.get('micromove_speed_mm_sec')
     if micromove is not None:
@@ -205,7 +232,8 @@ def validate_config(config) -> list[str]:
                 f"{tracking_type} requires exactly two counting_regions groups; found {n_groups}."
             )
 
-    if tracking_type in _PAIRWISE_TYPES and not global_cfg.get('interaction_distances'):
+    if tracking_type in _PAIRWISE_TYPES and not global_cfg.get('interaction_distances') \
+            and 'interaction_distances' not in exp_type.parameter_defaults:
         problems.append(
             f"{tracking_type} has no global.interaction_distances; "
             "the default of [8] mm will be used."

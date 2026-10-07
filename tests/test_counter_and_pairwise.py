@@ -180,7 +180,9 @@ def test_invalid_frames_do_not_contribute_to_interaction_percentages():
     assert tracker.get_percent_frames_interacting()[0] == pytest.approx(1.0)
 
 
-def test_percent_interacting_is_zero_when_no_frame_is_valid():
+def test_percent_interacting_is_missing_when_no_frame_is_valid():
+    """No valid frame is no measurement — NA, not a 0 that reads as "never
+    interacted" and gets tested as such (and never a division by zero)."""
     tracker = pairwise_pair(
         quality_a=("NotFound", "NotFound"),
         quality_b=("High", "High"),
@@ -189,6 +191,5 @@ def test_percent_interacting_is_zero_when_no_frame_is_valid():
         distance=(1.0, 1.0),
     )
     assert tracker.get_total_frames_with_valid_neighbor() == 0
-    assert tracker.get_percent_frames_interacting() == [0]
-    # summarize() must use the same guard rather than dividing by zero.
-    assert tracker.summarize()["PercentInteracting_8"] == 0
+    assert all(pd.isna(v) for v in tracker.get_percent_frames_interacting())
+    assert pd.isna(tracker.summarize()["PercentInteracting_8"])

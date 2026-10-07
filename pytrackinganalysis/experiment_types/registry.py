@@ -7,12 +7,14 @@ from __future__ import annotations
 
 from .base import ExperimentType
 from .custom import CustomExperimentType
+from .paired_open_field import PairedOpenFieldExperimentType
 from .valence import ValenceExperimentType
 
 # name (lowercase) -> class
 _REGISTRY: dict[str, type[ExperimentType]] = {
     CustomExperimentType.name.lower(): CustomExperimentType,
     ValenceExperimentType.name.lower(): ValenceExperimentType,
+    PairedOpenFieldExperimentType.name.lower(): PairedOpenFieldExperimentType,
 }
 
 
@@ -35,6 +37,7 @@ def get_experiment_type(name) -> ExperimentType:
 
 
 def available_experiment_types() -> list[ExperimentType]:
-    """One instance of each registered type, Custom first."""
-    ordered = sorted(_REGISTRY.values(), key=lambda c: (c is not CustomExperimentType, c.name))
-    return [cls() for cls in ordered]
+    """One instance of each registered type, Custom first, then in
+    registration order — the first concrete type is the default a new
+    Project is offered, so adding a type must not silently displace it."""
+    return [cls() for cls in _REGISTRY.values()]

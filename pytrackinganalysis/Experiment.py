@@ -25,6 +25,9 @@ _PARAMETER_KEYS = {
     'fps', 'mm_per_pixel', 'speed_window_seconds',
     'micromove_speed_mm_sec', 'walking_speed_mm_sec',
     'sleep_threshold_min', 'interaction_distances',
+    ## Pair proximity and open-field measures (ADR-0014, ADR-0015).
+    'merge_distance_mm', 'encounter_hysteresis_mm', 'encounter_gap_s',
+    'encounter_min_s', 'wall_zone_mm', 'fly_length_mm', 'fly_width_mm',
 }
 
 logger = logging.getLogger(__name__)
@@ -84,6 +87,41 @@ _TRACKING_TYPE_METRICS = {
     Parameters.TrackingType.COUNTER:                   [],
 }
 
+def metric_tiers(tracking_type, interaction_distances=()) -> tuple[list, list]:
+    """``(primary, secondary)`` metrics compared between treatments (Metric
+    Tier, ADR-0016). Everything else in a summary is descriptive — written to
+    the CSVs, never tested.
+
+    The one resolver for both levels: ``Experiment.stats`` passes its
+    parameters' distances, the Project's Combined Analysis passes the
+    distances named by its pooled columns. The pairwise rows of
+    ``_TRACKING_TYPE_METRICS`` are ``None`` because they depend on those
+    distances — read directly, they used to send the Project to a
+    ``FinalPI`` fallback that a pairwise summary never has, so no pairwise
+    Project was ever tested.
+    """
+    T = Parameters.TrackingType
+    interacting = [f"PercentInteracting_{d}" for d in interaction_distances]
+    if tracking_type == T.PAIRWISEINTERACTIONTRACKER:
+        primary = interacting + ['CentrophobismIndex', 'ExplorationAUC',
+                                 'TotalDistancePerMin']
+        secondary = ([f"EncounterRate_{d}" for d in interaction_distances]
+                     + [f"MeanEncounterDuration_{d}" for d in interaction_distances]
+                     + ['WalkingSpeed_mm_s', 'WalkingBoutsPerMin',
+                        'MeanWalkingBoutDuration_s', 'ExploredFraction',
+                        'ExploredFractionCenter', 'ExploredFractionPeriphery'])
+        return primary, secondary
+    if tracking_type == T.PAIRWISEINTERACTIONCOUNTER:
+        return interacting, []
+    return list(_TRACKING_TYPE_METRICS.get(tracking_type) or []), []
+
+
+def stats_metrics(tracking_type, interaction_distances=()) -> list:
+    """Every tested metric for *tracking_type*, primary tier first."""
+    primary, secondary = metric_tiers(tracking_type, interaction_distances)
+    return primary + secondary
+
+
 ## One-line reader-facing descriptions for the metrics stats() compares, used
 ## as section headings in *_Stats.txt so a reader never has to guess what a
 ## column name measures. PercentInteracting_<d> is described at runtime.
@@ -99,6 +137,27 @@ _METRIC_DESCRIPTIONS = {
                             'locomotor activity, typically read as a control.'),
     'AvgAdjX_mm': ('mean polarity-adjusted X position (mm); positive = toward '
                    'the side the design file orients as positive.'),
+    'CentrophobismIndex': ('Centrophobism Index over walking frames, -1..+1: '
+                           'P(periphery) - P(centre zone), the centre zone '
+                           'holding half the arena\'s area. 0 = uniform use; '
+                           'positive = wall-hugging. Pair mean.'),
+    'ExplorationAUC': ('mean share of the arena the body footprint had covered '
+                       'over the window, 0..1; higher = explored sooner. Pair '
+                       'mean.'),
+    'WalkingSpeed_mm_s': 'mean speed while walking (mm/s); motor capacity. Pair mean.',
+    'WalkingBoutsPerMin': 'walking bouts started per minute. Pair mean.',
+    'MeanWalkingBoutDuration_s': 'mean walking bout length (s). Pair mean.',
+    'ExploredFraction': 'share of the arena the body footprint covered by the window\'s end. Pair mean.',
+    'ExploredFractionCenter': 'share of the centre zone covered by the window\'s end. Pair mean.',
+    'ExploredFractionPeriphery': 'share of the periphery covered by the window\'s end. Pair mean.',
+}
+
+## Descriptions for the per-threshold metrics, filled with the distance.
+_THRESHOLD_DESCRIPTIONS = {
+    'PercentInteracting': ('fraction of valid frames (measured or merged) the '
+                           'Pair spent within {d} mm, 0..1.'),
+    'EncounterRate': 'Encounters within {d} mm per valid minute.',
+    'MeanEncounterDuration': 'mean length of an Encounter within {d} mm (s).',
 }
 
 
@@ -237,6 +296,26 @@ class Experiment:
                          "experiment itself is potentially an issue.")
             print(note)
 
+        ## Advisory flags (e.g. Paired Open Field's Possibly-Dead flag and ROI
+        ## Check): reported, never removed — the experimenter decides.
+        self.advisory_flags = self.experiment_type.compute_advisory_flags(self)
+        for line in self.advisory_flag_notes():
+            print(line)
+
+    def advisory_flag_notes(self) -> list:
+        """One line per kind of advisory flag raised, naming what it covers."""
+        flags = getattr(self, 'advisory_flags', None)
+        if flags is None or not len(flags):
+            return []
+        lines = []
+        descriptions = flags.attrs.get('descriptions', {})
+        for flag, rows in flags.groupby('Flag', sort=False):
+            names = ", ".join(str(n) for n in rows['Name'])
+            lines.append(f"Flagged ({flag}): {names} — "
+                         f"{descriptions.get(flag, 'see the report')} "
+                         f"(kept in all results).")
+        return lines
+
     # ------------------------------------------------------------------
     # Excluded Flies: type criterion + experimenter-declared removals
     # (ADR-0003, ADR-0010)
@@ -277,13 +356,11 @@ class Experiment:
             parts = []
             attrs = excluded.attrs
             n_removed = attrs.get('n_removed', 0)
-            n_low = attrs.get('n_low_transitions', 0)
+            n_policy = removals.policy_count(attrs)
             if n_removed:
                 parts.append(f"{n_removed} removed by the experimenter")
-            if n_low:
-                parts.append(f"{n_low} with fewer than "
-                             f"{attrs.get('min_transitions')} transitions during "
-                             f"the {attrs.get('phase_label')} phase")
+            if n_policy:
+                parts.append(f"{n_policy} {removals.policy_cause(attrs)}")
             detail = f": {', '.join(parts)}" if parts else ""
             lines.append(f"Excluded {len(excluded)} fly(ies){detail}.")
         for region in (excluded.attrs.get('unmatched_regions', [])
@@ -306,8 +383,11 @@ class Experiment:
         threshold = attrs.get('min_transitions')
         phase = attrs.get('phase_label', 'Primary')
         n_removed = attrs.get('n_removed', 0)
-        n_low = attrs.get('n_low_transitions', 0)
+        n_policy = removals.policy_count(attrs)
         if not len(excluded):
+            ## A type with its own criterion words its own "nothing excluded".
+            if attrs.get('policy_none'):
+                return f"none — {attrs['policy_none']}"
             if threshold:
                 return (f"none — every fly made at least {threshold} transitions "
                         f"during the {phase} phase, and no regions were removed")
@@ -318,9 +398,8 @@ class Experiment:
         parts = []
         if n_removed:
             parts.append(f"{n_removed} removed by the experimenter")
-        if n_low:
-            parts.append(f"{n_low} with fewer than {threshold} transitions "
-                         f"during the {phase} phase")
+        if n_policy:
+            parts.append(f"{n_policy} {removals.policy_cause(attrs)}")
         return (f"{len(excluded)} fly(ies) — {'; '.join(parts)} "
                 f"(see _Excluded.csv)")
 
@@ -349,7 +428,11 @@ class Experiment:
         if type_frame is not None:
             for _, row in type_frame.iterrows():
                 record = {c: row.get(c) for c in columns}
-                record['Reason'] = removals.LOW_TRANSITION_REASON
+                ## A type names its own criterion's reason; the frame without
+                ## one is the Low-Transition Exclusion, which predates the column.
+                reason = row.get('Reason') if 'Reason' in type_frame.columns else None
+                record['Reason'] = reason if isinstance(reason, str) and reason \
+                    else removals.LOW_TRANSITION_REASON
                 rows.append(record)
                 by_name[str(record.get('Name'))] = record
 
@@ -383,7 +466,9 @@ class Experiment:
         frame.attrs['unmatched_regions'] = [region for region, names
                                             in expanded.items() if not names]
         frame.attrs['n_removed'] = n_removed
-        frame.attrs['n_low_transitions'] = len(frame) - n_removed
+        frame.attrs['n_policy'] = len(frame) - n_removed
+        if not frame.attrs.get('policy_label'):
+            frame.attrs['n_low_transitions'] = frame.attrs['n_policy']
         return frame
 
     def _primary_transitions(self, columns, type_frame) -> dict:
@@ -508,8 +593,11 @@ class Experiment:
         else:
             p.set_tracking_type(tracking_type)
 
-        # Apply any explicit parameter overrides present in global:
-        overrides = {k: v for k, v in global_cfg.items() if k in _PARAMETER_KEYS}
+        # The type's own defaults first (e.g. Paired Open Field's interaction
+        # distances), then any explicit overrides present in global:.
+        overrides = {k: v for k, v in self.experiment_type.parameter_defaults.items()
+                     if k in _PARAMETER_KEYS}
+        overrides.update({k: v for k, v in global_cfg.items() if k in _PARAMETER_KEYS})
         if overrides:
             p.set(**overrides)
 
@@ -517,11 +605,8 @@ class Experiment:
 
     def _stats_metrics(self) -> list:
         """Return the metrics appropriate for pairwise comparison for this tracking type."""
-        tt = self.parameters.get_tracking_type()
-        if tt in (Parameters.TrackingType.PAIRWISEINTERACTIONTRACKER,
-                  Parameters.TrackingType.PAIRWISEINTERACTIONCOUNTER):
-            return [f"PercentInteracting_{d}" for d in self.parameters.interaction_distance_mm]
-        return _TRACKING_TYPE_METRICS.get(tt, [])
+        return stats_metrics(self.parameters.get_tracking_type(),
+                             self.parameters.interaction_distance_mm)
 
     def _resolve_cutoffs(self, cutoffs):
         """Return cutoffs to use, preferring the explicit argument over ``self.facet_cutoffs``.
@@ -1013,6 +1098,12 @@ class Experiment:
         summary.to_csv(path, index=False, na_rep='NA')
         print(f"Saved: {path}")
 
+        ## A pairwise tracker's summaries are one row per Pair (ADR-0013); the
+        ## individual flies go beside them, for inspection only.
+        per_fly = Arena.summarizes_pairs(self.parameters)
+        if per_fly:
+            self._save_per_fly(self.arena.summarize(per_fly=True), "_Summary_PerFly.csv")
+
         ## Exclusion audit (ADR-0003): written whenever the type has a
         ## criterion — even with zero exclusions — so absence of the file never
         ## needs interpreting.
@@ -1031,6 +1122,9 @@ class Experiment:
                                       f"{self.arena.experiment_name}_Summary_Facet.csv")
             summary_facet.to_csv(path_facet, index=False, na_rep='NA')
             print(f"Saved: {path_facet}")
+            if per_fly:
+                self._save_per_fly(self.arena.summarize_facet(cutoffs=cutoffs, per_fly=True),
+                                   "_Summary_Facet_PerFly.csv")
             if copy_to_clipboard:
                 summary_facet.to_clipboard(index=False, na_rep='NA')
         else:
@@ -1038,10 +1132,17 @@ class Experiment:
 
         return summary, summary_facet
 
+    def _save_per_fly(self, frame, suffix):
+        """Write a per-fly companion of a Pair summary to analysis_path."""
+        path = os.path.join(self.analysis_path, f"{self.arena.experiment_name}{suffix}")
+        self._with_flag_column(frame).to_csv(path, index=False, na_rep='NA')
+        print(f"Saved: {path}")
+
     def _with_flag_column(self, summary):
         """Append the ``LowMovementFlag`` column (per-fly, by Name) to a summary
         bound for a CSV. Flagged flies stay in the data — the column is how a
         downstream reader sees the flag. No-op when the type has no flag."""
+        summary = self._with_advisory_columns(summary)
         flagged = getattr(self, 'flagged_flies', None)
         if flagged is None or summary is None or 'Name' not in summary.columns:
             return summary
@@ -1050,6 +1151,28 @@ class Experiment:
         names = set(flagged['Name'].astype(str))
         out = summary.copy()
         out['LowMovementFlag'] = out['Name'].astype(str).isin(names)
+        return out
+
+    def _with_advisory_columns(self, summary):
+        """One ``<Flag>Flag`` column per kind of advisory flag the type can
+        raise. A fly-level flag marks its fly's row — or, on a Pair row, the
+        Pair it belongs to; a region-level flag marks every row of the region."""
+        flags = getattr(self, 'advisory_flags', None)
+        if flags is None or summary is None or 'Name' not in summary.columns:
+            return summary
+        out = summary.copy()
+        names = out['Name'].astype(str)
+        regions = out['TrackingRegion'].astype(str) if 'TrackingRegion' in out.columns \
+            else names
+        pair_rows = names == regions
+        for flag in flags.attrs.get('kinds', []):
+            rows = flags[flags['Flag'] == flag]
+            fly_level = rows['Level'] == 'fly'
+            by_name = set(rows.loc[fly_level, 'Name'].astype(str))
+            by_region = set(rows.loc[~fly_level, 'TrackingRegion'].astype(str))
+            fly_regions = set(rows.loc[fly_level, 'TrackingRegion'].astype(str))
+            out[f'{flag}Flag'] = (names.isin(by_name) | regions.isin(by_region)
+                                  | (pair_rows & regions.isin(fly_regions)))
         return out
 
     def stats(self, cutoffs=None, save: bool = True) -> str:
@@ -1084,6 +1207,13 @@ class Experiment:
         try:
             metrics = self._stats_metrics()
             tracking_type = self.parameters.get_tracking_type()
+            ## Tiers are labelled only where a type has a secondary tier, so a
+            ## single-tier type's Stats.txt reads exactly as it always has.
+            primary, secondary = metric_tiers(tracking_type,
+                                              self.parameters.interaction_distance_mm)
+            tier_of = ({m: 'primary' for m in primary}
+                       | {m: 'secondary - exploratory' for m in secondary}) \
+                if secondary else {}
             if not metrics:
                 ## Never write a zero-byte Stats.txt: a reader cannot tell an
                 ## empty file from a crashed run, and run_analysis reports
@@ -1097,7 +1227,7 @@ class Experiment:
             else:
                 self._print_stats_preamble(cutoffs)
                 for metric in metrics:
-                    self._print_metric_heading(metric)
+                    self._print_metric_heading(metric, tier_of.get(metric))
                     try:
                         if cutoffs is None:
                             self.arena.run_pairwise_comparisons(metric=metric)
@@ -1155,6 +1285,8 @@ class Experiment:
             if attrs.get('experiment_flagged'):
                 line += " >50% flagged: the experiment itself is potentially an issue."
             print(line)
+        for line in self.advisory_flag_notes():
+            print(f"{'Advisory':<16}: {line}")
 
         if cutoffs is not None:
             from . import windowing
@@ -1198,17 +1330,16 @@ class Experiment:
         print(bar)
         print()
 
-    def _print_metric_heading(self, metric: str) -> None:
+    def _print_metric_heading(self, metric: str, tier: str | None = None) -> None:
         """A ruled section heading naming the metric and what it measures."""
-        if metric.startswith('PercentInteracting_'):
-            distance = metric.rsplit('_', 1)[-1]
-            description = (f"fraction of valid frames spent within {distance} mm "
-                           f"of the partner, 0..1.")
+        stem, _, distance = metric.rpartition('_')
+        if stem in _THRESHOLD_DESCRIPTIONS:
+            description = _THRESHOLD_DESCRIPTIONS[stem].format(d=distance)
         else:
             description = _METRIC_DESCRIPTIONS.get(metric, '')
         bar = '-' * 72
         print(bar)
-        print(f"Metric: {metric}")
+        print(f"Metric: {metric}" + (f"  [{tier}]" if tier else ""))
         if description:
             print(f"  {description}")
         print(bar)
@@ -1947,10 +2078,16 @@ class Experiment:
                 ("Movement flag (min_movement)",
                  f"{min_movement:g} mm/min in the first phase"
                  if min_movement else "off (0)"))
+        min_valid = self.experiment_type.resolve_min_valid_fraction(global_cfg)
+        if min_valid is not None:
+            config_pairs.append(
+                ("Exclusion (min_valid_fraction)",
+                 f"Pairs tracked for under {min_valid:.0%} of the primary phase"
+                 if min_valid else "off (0)"))
         _kv("Configuration", config_pairs)
 
         # ---- Parameters ----------------------------------------------------
-        _kv("Parameters", [
+        parameter_pairs = [
             ("FPS", p.fps),
             ("mm per pixel", p.mm_per_pixel),
             ("Speed window", f"{p.speed_window_seconds} s"),
@@ -1961,7 +2098,20 @@ class Experiment:
             ("Interaction distances",
              ", ".join(str(d) for d in (p.interaction_distance_mm or [])) + " mm"
              if p.interaction_distance_mm else None),
-        ])
+        ]
+        if Arena.summarizes_pairs(p):
+            ## The settings behind the pair-proximity and open-field measures
+            ## (ADR-0014, ADR-0015), so a reader can reproduce them.
+            parameter_pairs += [
+                ("Merge distance", f"{p.merge_distance_mm:g} mm"),
+                ("Encounters", f"hysteresis {p.encounter_hysteresis_mm:g} mm, "
+                               f"gaps < {p.encounter_gap_s:g} s bridged, "
+                               f"≥ {p.encounter_min_s:g} s"),
+                ("Wall zone", f"{p.wall_zone_mm:g} mm"),
+                ("Fly body (exploration)",
+                 f"{p.fly_length_mm:g} × {p.fly_width_mm:g} mm"),
+            ]
+        _kv("Parameters", parameter_pairs)
 
         # ---- Experimental design -------------------------------------------
         design_pairs = []
@@ -2013,8 +2163,8 @@ class Experiment:
             parts = []
             if attrs.get('n_removed'):
                 parts.append(f"{attrs['n_removed']} removed")
-            if attrs.get('n_low_transitions'):
-                parts.append(f"{attrs['n_low_transitions']} low transitions")
+            if removals.policy_count(attrs):
+                parts.append(f"{removals.policy_count(attrs)} {removals.policy_label(attrs)}")
             detail = f" ({', '.join(parts)})" if parts else ""
             overview.append(("Excluded flies", f"{len(excluded)}{detail}"))
         flagged = getattr(self, 'flagged_flies', None)

@@ -1,9 +1,63 @@
+import logging
+
 import pandas as pd
-import numpy as np 
+import numpy as np
 from . import Tracker
+from . import openfield
 from . import windowing
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+
+logger = logging.getLogger(__name__)
+
+
+def classify_merges(distance_mm, measured, merge_distance_mm):
+    """Boolean mask of Merged frames (ADR-0014).
+
+    A maximal run of unmeasured frames is Merged when the measured distance
+    just before it *and* just after it are both below *merge_distance_mm*:
+    the two flies were touching going in and coming out, so the lost frames
+    are the flies resolved as one blob, not a fly gone missing. A run that
+    touches either end of the recording has only one bracket and stays
+    unmeasured. Positional — the inputs must be in frame order.
+    """
+    distance = pd.Series(np.asarray(distance_mm, dtype=float))
+    measured = pd.Series(np.asarray(measured, dtype=bool))
+    if merge_distance_mm is None or merge_distance_mm <= 0 or measured.all():
+        return np.zeros(len(measured), dtype=bool)
+    known = distance.where(measured)
+    before = known.ffill().shift(1)       # last measured distance strictly before
+    after = known.bfill().shift(-1)       # first measured distance strictly after
+    lost = ~measured
+    run = (lost != lost.shift()).cumsum()
+    ## A run's brackets are what its first frame saw before and its last frame
+    ## saw after; NaN (no bracket) compares False, so edge runs never merge.
+    entering = before.groupby(run).transform('first')
+    leaving = after.groupby(run).transform('last')
+    merged = lost & (entering < merge_distance_mm) & (leaving < merge_distance_mm)
+    return merged.to_numpy()
+
+
+def encounter_bouts(distance_mm, valid, minutes, d, hysteresis_mm, gap_s, min_s):
+    """Encounters below *d* as ``(start, end)`` positional index pairs (ADR-0014).
+
+    *distance_mm* already carries 0 on merged frames and *valid* includes
+    them. An Encounter starts below *d* and lasts until the distance rises
+    above ``d + hysteresis_mm`` — so a pair hovering at the threshold is one
+    Encounter, not dozens. Lost frames are breaks like any other, bridged
+    when shorter than *gap_s*; Encounters shorter than *min_s* are dropped.
+    """
+    distance = np.asarray(distance_mm, dtype=float)
+    valid = np.asarray(valid, dtype=bool)
+    state = np.full(distance.shape, np.nan)
+    state[valid & (distance < d)] = 1.0
+    state[valid & (distance > d + hysteresis_mm)] = 0.0
+    ## Between the thresholds a valid frame keeps the last valid state; lost
+    ## frames are NaN here too, so the fill carries across them.
+    held = pd.Series(state).ffill().fillna(0.0).to_numpy()
+    close = valid & (held == 1.0)
+    return openfield.find_bouts(close, minutes, bridge_s=gap_s, min_s=min_s)
+
 
 class PairwiseInteractionTracker(Tracker.Tracker):
     def __init__(self, tracking_region_id, object_id, tracking_regions, counting_regions, parameters, exp_design,rawdata):
@@ -59,12 +113,24 @@ class PairwiseInteractionTracker(Tracker.Tracker):
         neg_one_distance = (self.rawdata['ClosestNeighbor'] == -1) | (self.neighbor_tracker.rawdata['ClosestNeighbor'] == -1)
         null_observations = (self.rawdata['ClosestNeighbor'].isnull()) | (self.neighbor_tracker.rawdata['ClosestNeighbor'].isnull())
 
-        final_quality = quality & two_objects & (~neg_one_distance) & (~null_observations)
-        self.rawdata['IsNeighborValid'] = final_quality
+        measured = quality & two_objects & (~neg_one_distance) & (~null_observations)
+        ## The masks above combine two frames by index; a frame only one side
+        ## recorded comes back NaN, which is not a measurement.
+        measured = measured.reindex(self.rawdata.index, fill_value=False).astype(bool)
+        self.rawdata['IsNeighborMeasured'] = measured
 
-        self.rawdata['ClosestNeighbor_mm'] = self.rawdata['ClosestNeighbor']
-        self.rawdata.loc[~self.rawdata['IsNeighborValid'], 'ClosestNeighbor_mm'] = np.nan
-        self.rawdata['ClosestNeighbor_mm'] *= self.parameters.mm_per_pixel
+        distance_mm = self.rawdata['ClosestNeighbor'].where(measured) * self.parameters.mm_per_pixel
+
+        ## Frames where the flies touched and DTrack lost one of them are
+        ## contact, not missing data (ADR-0014): valid, at distance 0. Every
+        ## other lost frame stays out of both numerator and denominator.
+        merged = pd.Series(
+            classify_merges(distance_mm, measured,
+                            getattr(self.parameters, 'merge_distance_mm', 0)),
+            index=self.rawdata.index)
+        self.rawdata['IsMerged'] = merged
+        self.rawdata['IsNeighborValid'] = measured | merged
+        self.rawdata['ClosestNeighbor_mm'] = distance_mm.mask(merged, 0.0)
 
     def get_interaction_subset(self, range_minutes):
         """Interaction rows within ``[start, end)``; ``(0, 0)`` means the whole recording."""
@@ -84,7 +150,8 @@ class PairwiseInteractionTracker(Tracker.Tracker):
             results.append(data[f'Interaction_{dist}'].sum()) 
         total_valid_frames = self.get_total_frames_with_valid_neighbor(range_minutes)
         if(total_valid_frames==0):
-            perc_results = [0]*len(results)
+            ## Nothing measured is no measurement, not "never interacted".
+            perc_results = [np.nan]*len(results)
         else:
             perc_results=[x/total_valid_frames for x in results]
         return perc_results
@@ -104,31 +171,114 @@ class PairwiseInteractionTracker(Tracker.Tracker):
         return self.tracking_region_id == tracker.tracking_region_id
     
     def update_neighbor_interactions(self):
-        self.interaction_data = self.rawdata.loc[:,['Minutes','Indicator','ClosestNeighbor_mm','IsNeighborValid']]
+        self.interaction_data = self.rawdata.loc[:,['Minutes','Indicator','ClosestNeighbor_mm','IsNeighborValid','IsMerged']]
         for dist in self.parameters.interaction_distance_mm:
             self.interaction_data[f'Interaction_{dist}'] = (self.interaction_data['ClosestNeighbor_mm'] < dist) & (self.interaction_data['IsNeighborValid'])    
       
-    def summarize(self, range_minutes=(0,0)):        
-        tmp = Tracker.Tracker.summarize(self, range_minutes)
-        mean_neighbor_distance = self.get_mean_neighbor_distance(range_minutes)
-        median_neighbor_distance = self.get_median_neighbor_distance(range_minutes)
-        frames_interacting = self.get_frames_interacting(range_minutes)
-        total_valid_frames = self.get_total_frames_with_valid_neighbor(range_minutes)
-        if total_valid_frames == 0:
-            percent_frames_interacting = [0] * len(frames_interacting)
-        else:
-            percent_frames_interacting = [x/total_valid_frames for x in frames_interacting]
-        
-        distance_names = [f"FramesInteracting_{dist}" for dist in self.parameters.interaction_distance_mm]    
-        distance_names2 = [f"PercentInteracting_{dist}" for dist in self.parameters.interaction_distance_mm]    
-        
-        frames_interacting_series = pd.Series(frames_interacting, index=distance_names)
-        percent_frames_interacting_series = pd.Series(percent_frames_interacting, index=distance_names2)
-        
-        result = pd.concat([tmp,pd.Series({'MeanDistance': mean_neighbor_distance}),pd.Series({"MedianDistance" : median_neighbor_distance}),\
-            pd.Series({'ValidFrames': total_valid_frames}),frames_interacting_series,percent_frames_interacting_series])
+    def summarize(self, range_minutes=(0,0)):
+        """One fly's row: the Tracker base, the fly's open-field measures
+        (ADR-0015), and its Pair's proximity measures (ADR-0014), which both
+        flies of the Pair share. ``Arena`` collapses the two rows (ADR-0013)."""
+        return pd.concat([Tracker.Tracker.summarize(self, range_minutes),
+                          self.get_open_field_measures(range_minutes),
+                          self.get_pair_measures(range_minutes)])
 
-        return result
+    # ---- open-field measures (ADR-0015) -------------------------------
+
+    def arena_geometry(self):
+        """This region's arena as drawn, or None when its ROI cannot describe one."""
+        if not hasattr(self, '_arena_geometry'):
+            try:
+                self._arena_geometry = openfield.ArenaGeometry.from_roi(
+                    self.tracking_region_roi, self.parameters.mm_per_pixel)
+            except (KeyError, ValueError, TypeError) as err:
+                logger.warning("No arena geometry for %s (%s); open-field measures "
+                               "will be NA.", self.name, err)
+                self._arena_geometry = None
+        return self._arena_geometry
+
+    def _ensure_heading(self):
+        """Body-axis estimate over the whole recording, computed once: the
+        smoothing window looks either side of each frame, so it must see past
+        a phase boundary rather than be recomputed inside each window."""
+        if 'Heading' not in self.rawdata.columns:
+            self.rawdata['Heading'] = openfield.smoothed_heading(
+                self.rawdata['Xpos_mm'].to_numpy(), self.rawdata['Ypos_mm'].to_numpy(),
+                (self.rawdata['DataQuality'] == 'High').to_numpy(),
+                self.rawdata['Minutes'].to_numpy())
+
+    def get_open_field_measures(self, range_minutes=(0,0)):
+        """Centrophobism, exploration and walking structure for this fly."""
+        self._ensure_heading()
+        return openfield.fly_measures(self.get_data_subset(range_minutes),
+                                      self.arena_geometry(), self.parameters)
+
+    def get_coverage_curve(self, range_minutes=(0,0), n_points=60):
+        """``(elapsed minutes, share of arena covered)`` across a window, or
+        ``None`` without geometry or frames — the curve behind ExplorationAUC."""
+        geometry = self.arena_geometry()
+        if geometry is None:
+            return None
+        self._ensure_heading()
+        data = self.get_data_subset(range_minutes)
+        if len(data) < 2:
+            return None
+        minutes = data['Minutes'].to_numpy(dtype=float)
+        first = openfield.footprint_first_visits(
+            data['Xpos_mm'].to_numpy(), data['Ypos_mm'].to_numpy(),
+            (data['DataQuality'] == 'High').to_numpy(), minutes, geometry,
+            data['Heading'].to_numpy(), length_mm=self.parameters.fly_length_mm,
+            width_mm=self.parameters.fly_width_mm)
+        elapsed = np.linspace(0.0, minutes[-1] - minutes[0], n_points)
+        return elapsed, openfield.coverage_curve(first, minutes[0] + elapsed)
+
+    # ---- pair proximity measures (ADR-0014) ---------------------------
+
+    def get_pair_measures(self, range_minutes=(0,0)):
+        """The Pair's proximity measures, identical from either fly's side.
+
+        Interaction is a fraction of *valid* frames — measured or merged —
+        and an Encounter rate is per valid minute, so tracking losses shrink
+        the denominator rather than read as time apart.
+        """
+        distances = self.parameters.interaction_distance_mm
+        data = self.get_interaction_subset(range_minutes)
+        n_frames = len(data)
+        valid = data['IsNeighborValid'].to_numpy(dtype=bool)
+        n_valid = int(valid.sum())
+        distance = data['ClosestNeighbor_mm']
+        row = {
+            'MeanDistance': distance.mean(),
+            'MedianDistance': distance.median(),
+            'ValidFrames': n_valid,
+            'ValidFraction': n_valid / n_frames if n_frames else pd.NA,
+            'MergedFraction': int(data['IsMerged'].sum()) / n_valid if n_valid else pd.NA,
+        }
+        frames = {d: int(data[f'Interaction_{d}'].sum()) for d in distances}
+        for d in distances:
+            row[f'FramesInteracting_{d}'] = frames[d]
+        ## No valid frame is no measurement: NA, never 0 — a phase the
+        ## recording does not reach used to read as "never interacted" and was
+        ## tested as such.
+        for d in distances:
+            row[f'PercentInteracting_{d}'] = frames[d] / n_valid if n_valid else pd.NA
+
+        minutes = data['Minutes'].to_numpy(dtype=float)
+        observed = float(minutes[-1] - minutes[0]) if n_frames else 0.0
+        valid_minutes = observed * n_valid / n_frames if n_frames else 0.0
+        encounters = {}
+        for d in distances:
+            bouts = encounter_bouts(
+                distance.to_numpy(dtype=float), valid, minutes, d,
+                self.parameters.encounter_hysteresis_mm,
+                self.parameters.encounter_gap_s, self.parameters.encounter_min_s)
+            encounters[d] = openfield.bout_summary(bouts, minutes, valid_minutes)
+        for name, i in (('EncounterRate', 0), ('MeanEncounterDuration', 1),
+                        ('LatencyToFirstEncounter', 2)):
+            for d in distances:
+                value = encounters[d][i]
+                row[f'{name}_{d}'] = pd.NA if pd.isna(value) else value
+        return pd.Series(row)
     
     def get_time_dependent_interactions(self,window_size_min=10,step_size_min=5,range_minutes=(0,0)):
         data_subset = self.get_interaction_subset(range_minutes)

@@ -77,10 +77,17 @@ row via `pd.concat`, so columns are strictly additive down each branch.
 | **Quality** — `PercHighQuality, StartMinutes, EndMinutes` | ✅ | ✅ | ✅ | ✅ |
 | **Choice** — `FinalPI, FinalPercentage, <group counts>, Transitions, TransitionsPerMin` | — | ✅ | — | — |
 | **X-choice** — `AvgX_mm, VarX_mm, AvgAdjX_mm, VarAdjX_mm, TotalXDistance_mm` | — | — | ✅ | — |
-| **Interaction** — `MeanDistance, MedianDistance, ValidFrames, FramesInteracting_<d>, PercentInteracting_<d>` | — | — | — | ✅ |
+| **Interaction** — `MeanDistance, MedianDistance, ValidFrames, ValidFraction, MergedFraction, FramesInteracting_<d>, PercentInteracting_<d>, EncounterRate_<d>, MeanEncounterDuration_<d>, LatencyToFirstEncounter_<d>` | — | — | — | ✅ |
+| **Open field** — `WalkingSpeed_mm_s, WalkingBoutsPerMin, MeanWalkingBoutDuration_s, CentrophobismIndex(AllFrames), WallZoneFraction, MeanWallDistance_mm, ExploredFraction(Center/Periphery), ExplorationAUC, TimeTo50PctExplored` | — | — | — | ✅ (`openfield.py`) |
 
 *(`<group counts>` = one column per counting-region group, e.g. `Light`,
 `NoLight`. `<d>` iterates over `parameters.interaction_distance_mm`.)*
+
+A `PAIRWISEINTERACTIONTRACKER` summary is **one row per Pair** (ADR-0013):
+`Arena.summarize` averages the two flies' rows by region after exclusion
+(`Name` = the region, no `ObjectID`); `summarize(per_fly=True)` and the
+`_Summary_PerFly.csv` companions keep the individual flies. Merged-blob frames
+count as contact (ADR-0014); the open-field measures are ADR-0015.
 
 ### Counter branch (per region, per minute counts — no kinematics)
 
@@ -88,7 +95,7 @@ row via `pd.concat`, so columns are strictly additive down each branch.
 |---|:--:|:--:|:--:|
 | **Base** — `Treatment, Name, TrackingRegion, ObsMinutes, StartMinutes, EndMinutes` | ✅ | ✅ | ✅ |
 | **Choice** — `FinalPI, FinalPercentage, <group counts>` | — | ✅ | — |
-| **Interaction** — `MeanDistance, MedianDistance, ValidFrames, FramesInteracting_<d>, PercentInteracting_<d>` | — | — | ✅ (averaged over the 2 pseudo-trackers) |
+| **Interaction** — `MeanDistance, MedianDistance, ValidFrames, MergedFraction, FramesInteracting_<d>, PercentInteracting_<d>` | — | — | ✅ (averaged over the 2 pseudo-trackers; pair measures only — no fly identity, so no open-field measures) |
 
 **Key asymmetry:** the counter base row carries **no distance, speed, or
 activity** — a `Counter` never computes `Dist_mm`, because those quantities are
@@ -180,7 +187,8 @@ every other metric stays "Not applicable":
 | `TWOCHOICETRACKER` | `FinalPI`, `FinalPercentage`, `TotalDistancePerMin` |
 | `TWOCHOICECOUNTER` | `FinalPI`, `FinalPercentage` |
 | `XCHOICETRACKER` | `AvgAdjX_mm`, `TotalDistancePerMin` |
-| `PAIRWISEINTERACTIONTRACKER` / `PW-COUNTER` | `PercentInteracting_<d>` for each distance — built at runtime by `_stats_metrics()` |
+| `PAIRWISEINTERACTIONTRACKER` | **Primary:** `PercentInteracting_<d>`, `CentrophobismIndex`, `ExplorationAUC`, `TotalDistancePerMin`; **secondary (exploratory):** `EncounterRate_<d>`, `MeanEncounterDuration_<d>`, walking speed/bouts, explored fractions — `Experiment.metric_tiers()`, shared with the Project |
+| `PAIRWISEINTERACTIONCOUNTER` | `PercentInteracting_<d>` for each distance |
 | `COUNTER` | **`[]`** — no outcome column exists, so stats() prints "nothing to compare" |
 
 ### Type-specific analyses (event durations & light) — Arena only
@@ -218,12 +226,12 @@ behave like a plain `Tracker` plus a drop-specific outcome. **To finish it:**
 6. Add an Arena dispatch method if a bespoke aggregate plot is needed.
 
 ### `CENTROPHOBISMTRACKER` — same orphan status
-Centrophobism = wall-following / center avoidance; the metric is **radial
-distance from the ROI center** (the ROI geometry needed for it is already loaded
-into `self.tracking_region_roi`, and `get_plot_limits` already derives the
-arena's mm extents). Same six steps as `DDropTracker`, with `summarize`
-computing e.g. mean/median radial distance, a center-occupancy fraction, or a
-thigmotaxis index, and a matching Arena strip-plot backend.
+Centrophobism now exists as a measure: `openfield.py` (ADR-0015) computes the
+Centrophobism Index, wall measures, exploration and walking structure from any
+tracker's frames and its ROI, and `PairwiseInteractionTracker` uses it. The
+planned replacement for this enum value is a single-fly **Open Field**
+Experiment Type that calls the same module — a thin tracker whose `summarize`
+concatenates `openfield.fly_measures(...)` onto the base row.
 
 ---
 
