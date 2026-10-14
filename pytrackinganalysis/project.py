@@ -946,17 +946,25 @@ class Project:
         rows = [(m, r) for m, res in results.items() for r in res["comparisons"]]
         stratified = any(r["factor"] is not None for _m, r in rows)
         if rows:
-            comp = f"{'Comparison':<24} " if stratified else ""
-            header = (f"{'Metric':<20} {'Phase':<14} {comp}{'A':<18} {'B':<18} "
-                      f"{'diff':>8} {'perm p':>16} {'Welch p':>10} {'mixed p':>10}")
+            ## Columns as wide as their longest cell: genotype names such as
+            ## 'Nanchung>Chrimson' run past any fixed width.
+            def width(cells, header, least):
+                return max([least, len(header)] + [len(c) for c in cells])
+            a_cells = [f"{r['a']} (n={r['n_a']})" for _m, r in rows]
+            b_cells = [f"{r['b']} (n={r['n_b']})" for _m, r in rows]
+            wa, wb = width(a_cells, "A", 18), width(b_cells, "B", 18)
+            wp = width([r["phase"] for _m, r in rows], "Phase", 14)
+            wc = width([r["comparison"] for _m, r in rows], "Comparison", 24)
+            comp = f"{'Comparison':<{wc}} " if stratified else ""
+            header = (f"{'Metric':<20} {'Phase':<{wp}} {comp}{'A':<{wa}} "
+                      f"{'B':<{wb}} {'diff':>8} {'perm p':>16} {'Welch p':>10} "
+                      f"{'mixed p':>10}")
             lines += [header, "-" * len(header)]
-            for metric, r in rows:
-                comp = f"{r['comparison']:<24} " if stratified else ""
-                a = f"{r['a']} (n={r['n_a']})"
-                b = f"{r['b']} (n={r['n_b']})"
+            for (metric, r), a, b in zip(rows, a_cells, b_cells):
+                comp = f"{r['comparison']:<{wc}} " if stratified else ""
                 perm = comparisons.p_text(r) + ("*" if r["hypothesis"] else "")
                 lines.append(
-                    f"{metric:<20} {r['phase']:<14} {comp}{a:<18} {b:<18} "
+                    f"{metric:<20} {r['phase']:<{wp}} {comp}{a:<{wa}} {b:<{wb}} "
                     f"{r['diff']:>+8.3f} {perm:>16} "
                     f"{comparisons.p_text(r, 'p_welch'):>10} "
                     f"{comparisons.p_text(r, 'p_mixed'):>10}")
@@ -966,15 +974,17 @@ class Project:
                       "Sign-flip p (headline) beside the one-sample t-test p and",
                       "an intercept-only mixed model (replicate random intercept).",
                       ""]
-            header = (f"{'Metric':<20} {'Phase':<14} {'Treatment':<18} "
+            treats = [f"{r['treatment']} (n={r['n']})" for _m, r in one]
+            wt = max([18] + [len(t) for t in treats])
+            wp = max([14] + [len(r["phase"]) for _m, r in one])
+            header = (f"{'Metric':<20} {'Phase':<{wp}} {'Treatment':<{wt}} "
                       f"{'mean':>8} {'null':>6} {'sign-flip p':>16} "
                       f"{'t-test p':>10} {'mixed p':>10}")
             lines += [header, "-" * len(header)]
-            for metric, r in one:
-                treat = f"{r['treatment']} (n={r['n']})"
+            for (metric, r), treat in zip(one, treats):
                 perm = comparisons.p_text(r) + ("*" if r["hypothesis"] else "")
                 lines.append(
-                    f"{metric:<20} {r['phase']:<14} {treat:<18} "
+                    f"{metric:<20} {r['phase']:<{wp}} {treat:<{wt}} "
                     f"{r['mean']:>8.3f} {r['null']:>6g} {perm:>16} "
                     f"{comparisons.p_text(r, 'p'):>10} "
                     f"{comparisons.p_text(r, 'p_mixed'):>10}")
