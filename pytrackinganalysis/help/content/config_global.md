@@ -46,6 +46,10 @@ Experiment Types may expose quality knobs:
 - **`min_movement`** - for Valence, flies below this movement rate during the first phase are flagged in `LowMovementFlag` but kept in the results; `0` turns the flag off.
 - **`min_valid_fraction`** - for Paired Open Field, a Pair tracked (or merged) for under this fraction of the primary phase is excluded, both flies; `0` turns the exclusion off.
 
+## Directional Hypotheses
+
+Shown only for Valence, whose statistics are the Permutation Test. Each row is one prediction made before the data existed. Write it as `Mutant < WT` (mutants prefer Light less), naming levels of one design factor, or as `WT > indifference` for a single treatment. **Phases** lists the phase names it covers, or stays blank for the Primary Phase. A predicted comparison is tested one-sided, for `FinalPI` and `FinalPercentage`, within every level of the other factors. Everything else stays two-sided. Saving is blocked when a prediction names an unknown level, levels of two different factors, or a phase the current cutoffs do not create. In a Project the predictions are part of the shared design. See **Valence statistics**.
+
 ## Pairwise analysis
 
 Shown only for a pairwise tracking type (the Pairwise Interaction Tracker or Counter — and so for every Paired Open Field experiment). Leave a field blank to use the default its placeholder states.

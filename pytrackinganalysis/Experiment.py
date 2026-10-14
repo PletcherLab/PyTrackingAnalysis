@@ -161,6 +161,23 @@ _THRESHOLD_DESCRIPTIONS = {
 }
 
 
+def _test_detail(row: dict) -> str:
+    """How one headline p was obtained: sidedness, then exact or sampled."""
+    side = row.get("side", "two-sided")
+    if row.get("hypothesis"):
+        side = f"one-sided, predicted {row['hypothesis']}"
+    how = (f"exact over {row['relabellings']:,} relabellings"
+           if row.get("exact") else f"{row['relabellings']:,} random relabellings")
+    if row.get("exact") and row.get("p_floor", 0) >= 0.01:
+        how += f"; smallest achievable p = {row['p_floor']:.3g}"
+    return f"{side}; {how}"
+
+
+def _indifference_label(metric: str) -> str:
+    from . import indifference
+    return indifference.null_label(metric)
+
+
 class Experiment:
     """
     Primary organizer for a tracking experiment.
@@ -793,6 +810,10 @@ class Experiment:
                 lines.append(f"    {str(name):<{name_w}} : {levels_str}")
         else:
             lines.append("  Factors : none defined in config")
+        if self.experiment_type.permutation_stats:
+            hyps = self.comparison_design().hypotheses_text()
+            lines.append("  Directional Hypotheses : "
+                         + ("; ".join(hyps) if hyps else "none (all tests two-sided)"))
 
         ed = self.experimental_design
         tr = ed.tracking_regions if ed is not None else None
@@ -1224,6 +1245,15 @@ class Experiment:
                 else:
                     print(f"Warning: tracking type {tracking_type.name} has no statistics policy "
                           f"defined in this version. No comparisons were run.")
+            elif self.experiment_type.permutation_stats:
+                ## The Permutation Test policy (ADR-0017): Factor Comparisons,
+                ## permutation p headlined beside Welch/Holm. Same rows as the
+                ## report table and the figure brackets (comparisons module).
+                self._print_stats_preamble(cutoffs)
+                results = self.headline_results(cutoffs)
+                for metric in metrics:
+                    self._print_metric_heading(metric, tier_of.get(metric))
+                    self._print_headline_metric(metric, results.get(metric))
             else:
                 self._print_stats_preamble(cutoffs)
                 for metric in metrics:
@@ -1311,14 +1341,26 @@ class Experiment:
             print(f"Phases          : {';  '.join(parts)}")
             print()
             print("Every metric below is compared between treatments once per phase.")
-            print("The window of each test appears as 'Range Minutes' / 'Facet Range'")
-            print("(start, end) in the output. Windows are half-open [start, end): a")
-            print("row landing exactly on a boundary counts in the later phase.")
+            if self.experiment_type.permutation_stats:
+                print("Each test is listed under its phase name. Windows are half-open")
+                print("[start, end): a row landing exactly on a boundary counts in the")
+                print("later phase.")
+            else:
+                print("The window of each test appears as 'Range Minutes' / 'Facet Range'")
+                print("(start, end) in the output. Windows are half-open [start, end): a")
+                print("row landing exactly on a boundary counts in the later phase.")
         else:
             print()
             print("No facet phases are configured: every comparison below runs over")
             print("the whole recording.")
         print()
+        if self.experiment_type.permutation_stats:
+            from . import comparisons
+            for line in comparisons.method_lines(self.comparison_design(cutoffs)):
+                print(line)
+            print(bar)
+            print()
+            return
         print("Tests: two treatment levels -> Welch's t-test (no equal-variance")
         print("assumption); three or more -> Tukey HSD at alpha = 0.05; a single")
         print("level -> FinalPI and FinalPercentage are each tested against")
@@ -1328,6 +1370,59 @@ class Experiment:
         print("test - where one metric is tested in several phases, a note gives")
         print("the Bonferroni-adjusted threshold.")
         print(bar)
+        print()
+
+    def comparison_design(self, cutoffs=None):
+        """The design the comparisons read: factors, Directional Hypotheses,
+        and the Primary Phase at *cutoffs* (default: the configured ones)."""
+        from . import comparisons
+        return comparisons.experiment_design(self, self._resolve_cutoffs(cutoffs))
+
+    def headline_results(self, cutoffs=None) -> dict:
+        """``{metric: results}`` of the Permutation Test policy for every
+        tested metric — empty for a type that does not run it. Computed once
+        per data state (the comparisons module caches by content), so
+        Stats.txt, the report table and the figure brackets agree."""
+        from . import comparisons
+        return comparisons.experiment_results(
+            self, self._stats_metrics(), self._resolve_cutoffs(cutoffs))
+
+    def _print_headline_metric(self, metric: str, results: dict | None) -> None:
+        """One metric's Permutation Test (or Sign-Flip Test) results, phase
+        by phase, in Stats.txt."""
+        from . import comparisons
+        if not results or not (results["comparisons"] or results["indifference"]
+                               or results["notes"]):
+            print(f"Not applicable: no fly with an assigned treatment has a "
+                  f"value for {metric}.")
+            print()
+            return
+        for note in results["notes"]:
+            print(f"Note: {note}")
+        phase = None
+        for r in results["comparisons"]:
+            if r["phase"] != phase:
+                phase = r["phase"]
+                print(f"Phase: {phase}")
+            family = (f"; max-T over {r['family']} pairs, Welch p Holm-adjusted"
+                      if r["family"] > 1 else "")
+            print(f"  {r['comparison']}: {r['a']} (n={r['n_a']}, "
+                  f"mean={r['mean_a']:.4g}, sd={r['sd_a']:.4g}) vs. {r['b']} "
+                  f"(n={r['n_b']}, mean={r['mean_b']:.4g}, sd={r['sd_b']:.4g})")
+            print(f"    diff (B - A) = {r['diff']:+.4g}, Welch t = {r['t']:.3f}")
+            print(f"    permutation p = {comparisons.p_text(r)}  "
+                  f"[{_test_detail(r)}{family}]")
+            print(f"    Welch p       = {comparisons.p_text(r, 'p_welch')}")
+            if r.get("fixed_replicates"):
+                print(f"    note: {', '.join(r['fixed_replicates'])} hold(s) a "
+                      "single level here — fixed in every shuffle.")
+        for r in results["indifference"]:
+            print(f"Phase: {r['phase']} — test against indifference")
+            print(f"  {r['treatment']} (n={r['n']}, mean={r['mean']:.4g}, "
+                  f"sd={r['sd']:.4g}) vs. indifference = "
+                  f"{_indifference_label(metric)}: t = {r['t']:.3f}")
+            print(f"    sign-flip p   = {comparisons.p_text(r)}  [{_test_detail(r)}]")
+            print(f"    one-sample t p = {comparisons.p_text(r, 'p')}")
         print()
 
     def _print_metric_heading(self, metric: str, tier: str | None = None) -> None:
@@ -2118,6 +2213,9 @@ class Experiment:
         for name, lv in (global_cfg.get("experimental_design_factors") or {}).items():
             design_pairs.append((f"Factor: {name}",
                                  ", ".join(str(l) for l in lv)))
+        if self.experiment_type.permutation_stats:
+            for text in self.comparison_design().hypotheses_text():
+                design_pairs.append(("Directional Hypothesis", text))
         counting = (self.config.get("counting_regions") or {}) \
             if isinstance(self.config, dict) else {}
         for cname, spec in counting.items():

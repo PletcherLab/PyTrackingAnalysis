@@ -20,6 +20,7 @@ import pandas as pd
 import yaml
 
 from . import experiment_types, removals, windowing
+from .comparisons import canonical_hypotheses
 from .io_utils import atomic_write_text
 
 PROJECT_FILENAME = "project.yaml"
@@ -169,6 +170,45 @@ def create_project_file(project_dir, name: str | None = None,
     with open(path, "w", encoding="utf-8") as handle:
         yaml.safe_dump(payload, handle, sort_keys=False, allow_unicode=True)
     return path
+
+
+def replicate_config_paths(project_dir) -> list[str]:
+    """Every immediate subdirectory's ``tracking_config.yaml`` — the
+    replicates, found without loading (and so validating) the Project."""
+    out = []
+    for entry in sorted(os.listdir(str(project_dir))):
+        path = os.path.join(str(project_dir), entry, CONFIG_FILENAME)
+        if os.path.isfile(path):
+            out.append(path)
+    return out
+
+
+def write_replicate_hypotheses(project_dir, hypotheses) -> list[str]:
+    """Write *hypotheses* (the design's Directional Hypotheses) into every
+    replicate's ``global:`` — or remove them when empty — and return the
+    configs changed. A prediction depends on no replicate's data, so the
+    design can carry a new one to its replicates instead of leaving the
+    Project unloadable until each is edited by hand (ADR-0017)."""
+    changed = []
+    for path in replicate_config_paths(project_dir):
+        with open(path, encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+        g = config.get("global")
+        if not isinstance(g, dict):
+            continue
+        if canonical_hypotheses(g.get("hypotheses")) \
+                == canonical_hypotheses(hypotheses):
+            continue
+        if hypotheses:
+            g["hypotheses"] = [dict(h) if isinstance(h, dict) else h
+                               for h in hypotheses]
+        else:
+            g.pop("hypotheses", None)
+        atomic_write_text(
+            path, lambda h, c=config: yaml.safe_dump(c, h, sort_keys=False,
+                                                     allow_unicode=True))
+        changed.append(path)
+    return changed
 
 
 def _normalize(value):
@@ -398,6 +438,11 @@ class Project:
                         f"{label}: factors {sorted(extra)} are not in the "
                         f"project design")
                 continue
+            elif key == "hypotheses":
+                ## Compared as predictions, not text: order, spacing and
+                ## which way round the inequality is written do not matter.
+                actual = canonical_hypotheses(g.get(key))
+                expected_cmp = canonical_hypotheses(expected)
             elif resolver is not None:
                 actual = resolver(t, g)
                 expected_cmp = expected
@@ -408,6 +453,13 @@ class Project:
                 problems.append(
                     f"{label}: {key} is {actual!r} but the project design "
                     f"requires {expected_cmp!r}")
+        if "hypotheses" not in design_global \
+                and canonical_hypotheses(g.get("hypotheses")):
+            ## A prediction the design does not make is still a design
+            ## difference: it would turn this replicate's tests one-sided.
+            problems.append(
+                f"{label}: hypotheses {g.get('hypotheses')!r} are not in the "
+                "project design (Directional Hypotheses belong to the design)")
         if counting_names:
             have = [str(k) for k in (config.get("counting_regions") or {})]
             if have != counting_names:
@@ -475,6 +527,14 @@ class Project:
                 problems.append(
                     f"{label}: factor '{factor}' has levels {theirs} but "
                     f"the project uses {ours}")
+        if self.experiment_names:
+            ref = self._global(self.experiment_names[0]).get("hypotheses")
+            if canonical_hypotheses(g.get("hypotheses")) \
+                    != canonical_hypotheses(ref):
+                problems.append(
+                    f"{label}: hypotheses {g.get('hypotheses')!r} differ from "
+                    f"the project's {ref!r} (Directional Hypotheses must be "
+                    "the same in every replicate)")
         return problems
 
     def scaffold_replicate_config(self) -> dict:
@@ -493,6 +553,7 @@ class Project:
             factors=g.get("experimental_design_factors"),
             min_transitions=g.get("min_transitions"),
             min_movement=g.get("min_movement"),
+            hypotheses=g.get("hypotheses"),
         )
         counting_names = [str(n) for n in
                           (self.design.get("counting_regions") or [])]
@@ -823,6 +884,119 @@ class Project:
                 }).dropna(subset=["Value"])
                 yield metric, label, data[data["Treatment"] != ""], levels
 
+    def _design_global(self) -> dict:
+        """The design's ``global:`` — project.yaml's when it has a design,
+        else the first replicate's (legacy Projects agree on it anyway)."""
+        if self.design:
+            return dict(self.design.get("global") or {})
+        if self.experiment_names:
+            return self._global(self.experiment_names[0])
+        return {}
+
+    def metric_by_phase(self, summary: pd.DataFrame | None,
+                        facet: pd.DataFrame | None, metric: str):
+        """The pooled tidy frame of *metric* (Treatment, Phase, Value,
+        Experiment) — the same frame the Project's figures are drawn from."""
+        from . import comparisons
+        if facet is not None and "FacetRange" in facet.columns:
+            windows, label_of = self.window_labels(facet)
+            return comparisons.tidy_frame(
+                facet, metric,
+                facet["FacetRange"].map(lambda v: label_of[self.parse_window(v)]),
+                [label_of[w] for w in windows])
+        if summary is None:
+            return None
+        return comparisons.tidy_frame(summary, metric, "Whole recording",
+                                      ["Whole recording"])
+
+    def headline_results(self, summary: pd.DataFrame | None,
+                         facet: pd.DataFrame | None) -> dict:
+        """``{metric: results}`` of the Permutation Test policy on the pooled
+        flies — shuffled within each replicate, with the mixed model beside
+        it — for a type that runs it; else empty (ADR-0017)."""
+        from . import comparisons
+        if not self.experiment_type.permutation_stats:
+            return {}
+        columns = list(summary.columns) if summary is not None else []
+        if facet is not None:
+            columns += [c for c in facet.columns if c not in columns]
+        out = {}
+        for metric in self._metrics(columns):
+            tidy = self.metric_by_phase(summary, facet, metric)
+            if tidy is None:
+                continue
+            res = comparisons.headline_for(tidy, metric, self.experiment_type,
+                                           self._design_global())
+            if res is not None:
+                out[metric] = res
+        return out
+
+    def _headline_stats_lines(self, summary, facet) -> list[str]:
+        """Stats.txt body for a type that runs the Permutation Test."""
+        from . import comparisons
+        results = self.headline_results(summary, facet)
+        labels = (list(self.window_labels(facet)[1].values())
+                  if facet is not None and "FacetRange" in facet.columns
+                  else ["Whole recording"])
+        design = comparisons.Design.from_global(self._design_global(), labels)
+        lines = comparisons.method_lines(design, project=True)
+        lines += ["=" * 72, ""]
+        for warning in self.warnings:
+            lines.append(f"Note: {warning}")
+        rows = [(m, r) for m, res in results.items() for r in res["comparisons"]]
+        stratified = any(r["factor"] is not None for _m, r in rows)
+        if rows:
+            comp = f"{'Comparison':<24} " if stratified else ""
+            header = (f"{'Metric':<20} {'Phase':<14} {comp}{'A':<18} {'B':<18} "
+                      f"{'diff':>8} {'perm p':>16} {'Welch p':>10} {'mixed p':>10}")
+            lines += [header, "-" * len(header)]
+            for metric, r in rows:
+                comp = f"{r['comparison']:<24} " if stratified else ""
+                a = f"{r['a']} (n={r['n_a']})"
+                b = f"{r['b']} (n={r['n_b']})"
+                perm = comparisons.p_text(r) + ("*" if r["hypothesis"] else "")
+                lines.append(
+                    f"{metric:<20} {r['phase']:<14} {comp}{a:<18} {b:<18} "
+                    f"{r['diff']:>+8.3f} {perm:>16} "
+                    f"{comparisons.p_text(r, 'p_welch'):>10} "
+                    f"{comparisons.p_text(r, 'p_mixed'):>10}")
+        one = [(m, r) for m, res in results.items() for r in res["indifference"]]
+        if one:
+            lines += ["", "Tests against indifference (single treatment level)",
+                      "Sign-flip p (headline) beside the one-sample t-test p and",
+                      "an intercept-only mixed model (replicate random intercept).",
+                      ""]
+            header = (f"{'Metric':<20} {'Phase':<14} {'Treatment':<18} "
+                      f"{'mean':>8} {'null':>6} {'sign-flip p':>16} "
+                      f"{'t-test p':>10} {'mixed p':>10}")
+            lines += [header, "-" * len(header)]
+            for metric, r in one:
+                treat = f"{r['treatment']} (n={r['n']})"
+                perm = comparisons.p_text(r) + ("*" if r["hypothesis"] else "")
+                lines.append(
+                    f"{metric:<20} {r['phase']:<14} {treat:<18} "
+                    f"{r['mean']:>8.3f} {r['null']:>6g} {perm:>16} "
+                    f"{comparisons.p_text(r, 'p'):>10} "
+                    f"{comparisons.p_text(r, 'p_mixed'):>10}")
+        if any(r["hypothesis"] for _m, r in rows + one):
+            lines += ["", "* one-sided, in the direction a Directional "
+                          "Hypothesis predicted."]
+        fixed = sorted({f"{r['phase']}, {r['comparison']}: "
+                        f"{', '.join(r['fixed_replicates'])}"
+                        for _m, r in rows if r["fixed_replicates"]})
+        if fixed:
+            lines += ["", "Replicates holding a single level of a comparison "
+                          "(fixed in every shuffle):"]
+            lines += [f"  {f}" for f in fixed]
+        notes = [n for res in results.values() for n in res["notes"]]
+        if notes:
+            lines += [""] + [f"Note: {n}" for n in dict.fromkeys(notes)]
+        if not rows and not one:
+            lines.append("No comparison could be run: no metric had two groups "
+                         "of at least two flies, or one treatment with a value "
+                         "to test against indifference.")
+        return lines
+
     def comparison_rows(self, summary: pd.DataFrame,
                         facet: pd.DataFrame | None) -> list[dict]:
         """One row per metric × phase × treatment pair: pooled Welch/Tukey p
@@ -902,59 +1076,32 @@ class Project:
     def _mixed_p(data: pd.DataFrame, a: str, b: str) -> float | None:
         """Treatment p-value from a linear mixed model on the (a, b) subset:
         Value ~ Treatment with a per-Experiment random intercept."""
-        try:
-            import warnings
-
-            import statsmodels.formula.api as smf
-            sub = data[data["Treatment"].isin([a, b])].copy()
-            if sub["Experiment"].nunique() < 2:
-                return None
-            sub["is_b"] = (sub["Treatment"] == b).astype(float)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                model = smf.mixedlm("Value ~ is_b", sub,
-                                    groups=sub["Experiment"])
-                fit = model.fit(reml=True, method="lbfgs")
-            return float(fit.pvalues["is_b"])
-        except Exception:  # noqa: BLE001
-            return None
+        from .comparisons import mixed_p_value
+        return mixed_p_value(data, a, b)
 
     @staticmethod
     def _mixed_p_vs(data: pd.DataFrame, null: float) -> float | None:
         """p-value that the mean differs from *null*, from an intercept-only
         linear mixed model on (Value − null) with a per-Experiment random
         intercept — the single-treatment companion of :meth:`_mixed_p`."""
-        try:
-            import warnings
-
-            import statsmodels.formula.api as smf
-            if data["Experiment"].nunique() < 2:
-                return None
-            sub = data.assign(Deviation=data["Value"] - null)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                model = smf.mixedlm("Deviation ~ 1", sub,
-                                    groups=sub["Experiment"])
-                ## Not lbfgs (which _mixed_p uses): on an intercept-only
-                ## model it raises "Singular matrix" even when the replicates
-                ## differ. bfgs converges; powell is the fallback.
-                fit = model.fit(reml=True, method=["bfgs", "powell"])
-            return float(fit.pvalues["Intercept"])
-        except Exception:  # noqa: BLE001
-            return None
+        from .comparisons import mixed_p_vs_null
+        return mixed_p_vs_null(data, null)
 
     def stats_text(self, summary: pd.DataFrame,
                    facet: pd.DataFrame | None) -> str:
         from . import indifference
 
-        rows = self.comparison_rows(summary, facet)
         bar = "=" * 72
-        lines = [bar, f"Project statistics — {self.name}",
-                 f"Experiment type : {self.experiment_type.display_name}",
-                 f"Replicates      : {len(self.experiment_names)} "
-                 f"({', '.join(self.experiment_names)})",
-                 f"Flies (pooled)  : {len(summary)}",
-                 "",
+        head = [bar, f"Project statistics — {self.name}",
+                f"Experiment type : {self.experiment_type.display_name}",
+                f"Replicates      : {len(self.experiment_names)} "
+                f"({', '.join(self.experiment_names)})",
+                f"Flies (pooled)  : {len(summary)}",
+                ""]
+        if self.experiment_type.permutation_stats:
+            return "\n".join(head + self._headline_stats_lines(summary, facet)) + "\n"
+        rows = self.comparison_rows(summary, facet)
+        lines = head + [
                  "Pooled p: Welch's t-test (two levels) / Tukey HSD (more) on",
                  "all flies pooled across replicates — matches the plots.",
                  "Mixed p: linear mixed model per pair (treatment fixed,",
@@ -1054,14 +1201,25 @@ class Project:
         delete_narrative_md(self.analysis_path)
 
     def ai_prompt(self) -> str:
+        if self.experiment_type.permutation_stats:
+            stats = (
+                "The statistics table's headline is the permutation p, with "
+                "labels shuffled within each replicate so a replicate effect "
+                "cannot pose as a treatment effect; the Welch and linear "
+                "mixed-model p-values beside it are context — say whether "
+                "they agree, and comment on consistency across the "
+                "replicates table.")
+        else:
+            stats = (
+                "The statistics table shows both pooled per-fly tests and a "
+                "linear mixed model whose p-values account for between-"
+                "replicate variation — comment on their agreement or "
+                "disagreement, and on consistency across the replicates "
+                "table.")
         return self.experiment_type.ai_summary_prompt() + (
             "\n\nProject context: this is a PROJECT-level report combining "
             f"{len(self.experiment_names)} replicate experiments of the same "
-            "design; flies are pooled by treatment across replicates. The "
-            "statistics table shows both pooled per-fly tests and a linear "
-            "mixed model whose p-values account for between-replicate "
-            "variation — comment on their agreement or disagreement, and on "
-            "consistency across the replicates table.")
+            "design; flies are pooled by treatment across replicates. " + stats)
 
     def generate_ai_summary(self, provider: str, model: str | None = None) -> str:
         from .ai import build_payload, get_summarizer
@@ -1095,7 +1253,8 @@ class Project:
             style = specs.style_for(spec)
             df = pf.faceted_data_from_combined(
                 facet, info["metric"], [label_of[w] for w in windows],
-                lambda v: label_of[self.parse_window(v)])
+                lambda v: label_of[self.parse_window(v)],
+                self.experiment_type, self._design_global())
             g = pf.build_ggplot(df, spec, style)
             for fmt in formats:
                 path = os.path.join(out_dir, f"{plot_id}.{fmt}")
@@ -1130,7 +1289,8 @@ class Project:
                 df = pf.faceted_data_from_combined(
                     facet, info["metric"],
                     [label_of[w] for w in windows],
-                    lambda v: label_of[self.parse_window(v)])
+                    lambda v: label_of[self.parse_window(v)],
+                    self.experiment_type, self._design_global())
                 g = pf.build_ggplot(df, spec, style)
                 png = pf.render_png_bytes(g, style, dpi=200)
                 w, h = Image.open(io.BytesIO(png)).size
@@ -1221,8 +1381,20 @@ class Project:
         for block in self._pub_figure_blocks(facet, _m):
             report.add(block)
 
+        if self.experiment_type.permutation_stats:
+            from . import comparisons
+            from .report_figures import permutation_tables
+            labels = (list(self.window_labels(facet)[1].values())
+                      if facet is not None and "FacetRange" in facet.columns
+                      else ["Whole recording"])
+            for block in permutation_tables(
+                    self.headline_results(summary, facet), project=True,
+                    design=comparisons.Design.from_global(
+                        self._design_global(), labels)):
+                report.add(block)
         rows, levels = [], []
-        for r in self.comparison_rows(summary, facet):
+        for r in ([] if self.experiment_type.permutation_stats
+                  else self.comparison_rows(summary, facet)):
             mixed = f"{r['p_mixed']:.4g}" if r["p_mixed"] is not None else "—"
             rows.append([r["metric"], r["phase"],
                          f"{r['a']} (n={r['n_a']})",
@@ -1245,7 +1417,8 @@ class Project:
         from .report_figures import indifference_table
 
         one_rows, one_levels = [], []
-        for r in self.indifference_rows(summary, facet):
+        for r in ([] if self.experiment_type.permutation_stats
+                  else self.indifference_rows(summary, facet)):
             mixed = f"{r['p_mixed']:.4g}" if r["p_mixed"] is not None else "—"
             one_rows.append([r["metric"], r["phase"],
                              f"{r['treatment']} (n={r['n']})",

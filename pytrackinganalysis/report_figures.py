@@ -693,6 +693,13 @@ def build_stats_table(experiment) -> list:
         metrics = []
     if not metrics:
         return []
+    exp_type = getattr(experiment, "experiment_type", None)
+    if getattr(exp_type, "permutation_stats", False):
+        from . import comparisons
+        return permutation_tables(
+            comparisons.experiment_results(experiment, metrics),
+            tier_of=_metric_tier_labels(experiment),
+            design=comparisons.experiment_design(experiment))
     windows, labels = _facet_windows_and_labels(experiment)
     if not windows:
         windows, labels = [(0, 0)], ["Whole recording"]
@@ -801,6 +808,119 @@ def _metric_tier_labels(experiment) -> dict:
         return {}
     return {**{mt: "primary" for mt in primary},
             **{mt: "secondary" for mt in secondary}}
+
+
+def permutation_tables(results: dict, tier_of: dict | None = None,
+                       project: bool = False, design=None) -> list:
+    """The Permutation Test policy's results (``{metric: phase_results}``) as
+    report tables — one for treatment comparisons, one for tests against
+    indifference — shared by the experiment and Project reports.
+
+    The permutation p is the headline: it alone drives the highlight and the
+    Significant column; Welch (and, in a Project, mixed-model) p sit beside
+    it as context. A one-sided row's p carries a dagger, and the caption
+    names the prediction.
+    """
+    from . import comparisons, indifference
+
+    rows, levels, one_rows, one_levels = [], [], [], []
+    hypotheses: list[str] = []
+    stratified = any(r["factor"] is not None
+                     for res in results.values() for r in res["comparisons"])
+    exact_floor = False
+    for metric, res in results.items():
+        for r in res["comparisons"]:
+            mark = " †" if r["hypothesis"] else ""
+            if r["hypothesis"] and r["hypothesis"] not in hypotheses:
+                hypotheses.append(r["hypothesis"])
+            exact_floor |= bool(r["exact"] and r["p_floor"] >= 0.01)
+            cells = [metric, r["phase"]]
+            if stratified:
+                cells.append(r["comparison"])
+            cells += [f"{r['a']} (n={r['n_a']})", f"{r['b']} (n={r['n_b']})",
+                      f"{r['diff']:+.3f}",
+                      comparisons.p_text(r) + mark,
+                      comparisons.p_text(r, "p_welch")]
+            if project:
+                cells.append(comparisons.p_text(r, "p_mixed"))
+            else:
+                cells.append("yes" if r["significant"] else "no")
+            rows.append(cells)
+            levels.append(m.Level.OK if r["significant"] else None)
+        for r in res["indifference"]:
+            mark = " †" if r["hypothesis"] else ""
+            if r["hypothesis"] and r["hypothesis"] not in hypotheses:
+                hypotheses.append(r["hypothesis"])
+            exact_floor |= bool(r["exact"] and r["p_floor"] >= 0.01)
+            cells = [metric, r["phase"], f"{r['treatment']} (n={r['n']})",
+                     f"{r['mean']:.3f}", indifference.null_label(metric),
+                     f"{r['diff']:+.3f}", comparisons.p_text(r) + mark,
+                     comparisons.p_text(r, "p")]
+            cells.append(comparisons.p_text(r, "p_mixed") if project
+                         else ("yes" if r["significant"] else "no"))
+            one_rows.append(cells)
+            one_levels.append(m.Level.OK if r["significant"] else None)
+
+    tail = ""
+    if hypotheses:
+        tail += (" † One-sided, in the direction a Directional Hypothesis "
+                 "predicted: " + "; ".join(hypotheses) + ".")
+    if exact_floor:
+        tail += (" '(min …)': an exact test with few possible relabellings — "
+                 "no smaller p was achievable with these group sizes.")
+    blocks = []
+    if design is not None and (rows or one_rows):
+        ## The predictions are stated before the numbers they turn one-sided.
+        blocks.append(m.Paragraph(comparisons.hypotheses_sentence(design)))
+    if rows:
+        columns = ["Metric", "Phase"]
+        if stratified:
+            columns.append("Comparison")
+        columns += ["Group A", "Group B", "Mean diff (B − A)",
+                    "Permutation p", "Welch p"]
+        columns.append("Mixed p" if project else "Significant")
+        if tier_of:
+            columns.insert(1, "Tier")
+            rows = [[row[0], tier_of.get(row[0], "")] + row[1:] for row in rows]
+        caption = (
+            "Permutation p: the headline — each pair's Welch t located among "
+            f"{_shuffles_text()} relabellings of the flies"
+            + (", shuffled within each replicate" if project else "")
+            + (" and within each stratum of the other factors (each factor is "
+               "compared within every level of the others)" if stratified else "")
+            + "; max-T across the pairs of a comparison with three or more "
+            "levels. It alone decides significance (α = 0.05, highlighted). "
+            "Welch p: Welch's t-test, Holm-adjusted with three or more levels"
+            + ("; Mixed p: linear mixed model with a per-replicate random "
+               "intercept — context, as Welch is" if project else " — context")
+            + ". No correction across phases, strata or metrics; full output "
+            "in the _Stats.txt file." + tail)
+        blocks.append(m.Table(columns=columns, rows=rows, row_levels=levels,
+                              title="Statistical comparisons", caption=caption))
+    if one_rows:
+        caption = (
+            "One treatment level, so no between-treatment comparison: each "
+            "phase's PI is tested against 0 and Percentage against 0.5 (50%). "
+            "Sign-flip p: the headline — the one-sample t located among "
+            f"{_shuffles_text()} random sign flips of each fly's distance from "
+            "the null (assumes values symmetric about it under no "
+            "preference); it alone decides significance (α = 0.05, "
+            "highlighted). t-test p: one-sample t-test"
+            + ("; Mixed p: intercept-only mixed model with a per-replicate "
+               "random intercept" if project else "")
+            + " — context. No correction across phases or metrics." + tail)
+        blocks.append(m.Table(
+            columns=["Metric", "Phase", "Treatment", "Mean", "Indifference",
+                     "Mean − indifference", "Sign-flip p", "t-test p",
+                     "Mixed p" if project else "Significant"],
+            rows=one_rows, row_levels=one_levels,
+            title="Tests against indifference", caption=caption))
+    return blocks
+
+
+def _shuffles_text() -> str:
+    from . import permutation
+    return f"{permutation.SHUFFLES:,} (or, when fewer exist, all)"
 
 
 def indifference_table(rows, row_levels, mixed: bool = False):
@@ -1420,6 +1540,22 @@ def _valence_headline(experiment) -> list:
             f"Mean preference index during the {where}: {'; '.join(parts)}. "
             "Positive PI indicates preference for Light over NoLight."))
 
+    if getattr(getattr(experiment, "experiment_type", None),
+               "permutation_stats", False):
+        ## The headline phase's PI comparisons, looked up from the same
+        ## results Stats.txt prints — never a second, different test.
+        from . import comparisons
+        results = comparisons.experiment_results(
+            experiment, ["FinalPI"]).get("FinalPI")
+        if results is not None:
+            phase = label if windows else "Whole recording"
+            only = {"comparisons": [r for r in results["comparisons"]
+                                    if r["phase"] == phase],
+                    "indifference": [r for r in results["indifference"]
+                                     if r["phase"] == phase],
+                    "notes": []}
+            blocks += permutation_tables({"FinalPI": only})
+        return blocks
     table = _pairwise_table(summary, "FinalPI", treatments, where)
     if table is not None:
         blocks.append(table)

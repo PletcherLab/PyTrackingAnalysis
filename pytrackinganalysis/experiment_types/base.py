@@ -96,6 +96,11 @@ class ExperimentType:
     #: frames are under this fraction of the Primary Phase is excluded.
     #: yaml ``min_valid_fraction`` overrides; 0 = off; ``None`` = no criterion.
     default_min_valid_fraction: float | None = None
+    #: The type headlines the Permutation Test (see CONTEXT.md): Factor
+    #: Comparisons, Welch/Holm beside a permutation p, Directional
+    #: Hypotheses from the design's ``hypotheses:``. A method choice, so it
+    #: belongs to the type (ADR-0002, ADR-0017); off for Custom.
+    permutation_stats: bool = False
 
     # ---- identity -----------------------------------------------------
 
@@ -354,6 +359,32 @@ class ExperimentType:
         The base type adds nothing (a Custom Experiment is unconstrained).
         """
         return []
+
+    def phase_labels_for_config(self, global_cfg: dict) -> list[str]:
+        """The phase labels the design's cutoffs produce ("Whole recording"
+        when it has none) — what a Directional Hypothesis's ``phases`` name."""
+        from .. import windowing
+        cutoffs = self.resolve_facet_cutoffs(global_cfg or {})
+        if not cutoffs:
+            return ["Whole recording"]
+        return self.phase_labels_for(list(windowing.facet_windows(cutoffs)),
+                                     global_cfg)
+
+    def _validate_hypotheses(self, global_cfg: dict) -> list[str]:
+        """Directional Hypotheses (``hypotheses:``): only a type that runs the
+        Permutation Test reads them, so anywhere else they are an error rather
+        than a silently ignored prediction."""
+        raw = (global_cfg or {}).get("hypotheses")
+        if raw in (None, [], ""):
+            return []
+        if not self.permutation_stats:
+            return [f"{self.display_name}: 'hypotheses' (Directional "
+                    "Hypotheses) are read only by experiment types that run "
+                    "the Permutation Test; remove them or choose such a type."]
+        from .. import comparisons
+        return [f"{self.display_name}: {p}" for p in comparisons.validate_hypotheses(
+            raw, global_cfg.get("experimental_design_factors"),
+            self.phase_labels_for_config(global_cfg))]
 
     # ---- new-project scaffold -----------------------------------------
 

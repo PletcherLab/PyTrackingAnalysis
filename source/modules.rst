@@ -15,5 +15,7 @@ PyTrackingAnalysis
    TwoChoiceCounter
    TwoChoiceTracker
    XChoiceTracker
+   comparisons
    config_validation
+   permutation
    windowing

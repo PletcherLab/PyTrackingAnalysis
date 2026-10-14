@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
 from .. import Parameters as _ParametersMod
 from .. import experiment_types as _et
 from ..help import HelpButton
+from ._hypotheses import HypothesesEditor
 
 
 # (display_label, yaml/enum_value). The dropdowns show the label; we read and
@@ -320,6 +321,15 @@ class GlobalTab(QWidget):
         valid_row.addWidget(self.min_valid_fraction)
         valid_row.addStretch()
         outer.addLayout(valid_row)
+
+        # Directional Hypotheses (ADR-0017): only for a type that runs the
+        # Permutation Test, which is the only reader of them.
+        outer.addSpacing(12)
+        self._hypotheses_section = _section_label(
+            "Directional Hypotheses (optional)")
+        outer.addWidget(self._hypotheses_section)
+        self.hypotheses = HypothesesEditor()
+        outer.addWidget(self.hypotheses)
 
         outer.addSpacing(12)
         outer.addWidget(_section_label("Parameter overrides (leave blank to use rig defaults)"))
@@ -625,6 +635,14 @@ class GlobalTab(QWidget):
         elif not has_flag:
             self.min_movement.clear()
 
+        # Directional Hypotheses: a type that does not run the Permutation
+        # Test would never read them, so the section hides and drops them.
+        has_hypotheses = bool(t.permutation_stats)
+        self._hypotheses_section.setVisible(has_hypotheses)
+        self.hypotheses.setVisible(has_hypotheses)
+        if not has_hypotheses:
+            self.hypotheses.set_hypotheses([])
+
         # Calibration overrides: disabled when the type forbids them on this rig.
         self._apply_calibration_lock()
 
@@ -777,6 +795,11 @@ class GlobalTab(QWidget):
                 self.use_facets.setChecked(False)
                 self.facet_cutoffs.clear()
 
+        # Directional Hypotheses: the yaml's, for a type that reads them;
+        # always set or cleared so a previous file's never leak through.
+        self.hypotheses.set_hypotheses(
+            g.get("hypotheses") if t.permutation_stats else [])
+
         # Quality criteria: the yaml's values, else the type defaults.
         if t.default_min_transitions is not None:
             self.min_transitions.setText(
@@ -852,6 +875,7 @@ class GlobalTab(QWidget):
         "min_transitions",
         "min_movement",
         "min_valid_fraction",
+        "hypotheses",
         "fps",
         "mm_per_pixel",
         "speed_window_seconds",
@@ -964,12 +988,31 @@ class GlobalTab(QWidget):
                         f"min_movement: '{text}' must be a number ≥ 0 in mm/min "
                         f"(0 turns the flagging off)")
 
+        if t.permutation_stats:
+            errors += [f"Directional Hypotheses: {p}"
+                       for p in self.hypotheses.problems(
+                           self.get_factors(), self._phase_labels_now(t))]
+
         if self.tracking_rig.currentData() == "movie":
             for label, widget in (("FPS", self.fps), ("mm per pixel", self.mm_per_pixel)):
                 if not widget.text().strip():
                     errors.append(f"{label}: required when the rig is Movie (there is no preset to fall back on)")
 
         return errors
+
+    def _phase_labels_now(self, t) -> list[str]:
+        """The phase names the form's current facets produce — what a
+        Directional Hypothesis's phases must name."""
+        g: dict = {}
+        if self.use_facets.isChecked():
+            try:
+                g["facet_cutoffs"] = _parse_cutoffs(self.facet_cutoffs.text())
+            except ValueError:
+                pass
+            names = _parse_labels(self.facet_labels.text())
+            if names:
+                g["facet_labels"] = names
+        return t.phase_labels_for_config(g)
 
     def dump(self) -> dict:
         g = {
@@ -1077,6 +1120,12 @@ class GlobalTab(QWidget):
                     g["min_valid_fraction"] = _clean_number(text)
                 except ValueError:
                     pass  # validation_errors() blocks the save first
+        ## Directional Hypotheses: written only when declared, for a type
+        ## that reads them (ADR-0017).
+        if t.permutation_stats:
+            hypotheses = self.hypotheses.hypotheses()
+            if hypotheses:
+                g["hypotheses"] = hypotheses
 
         return {"global": g}
 

@@ -205,7 +205,9 @@ class PlotSpec:
     ref_line: float | None = None
     #: Draw per-facet pairwise p-value brackets (Welch for two shown
     #: treatments, Tukey HSD beyond — the same policy as Stats.txt); with one
-    #: shown treatment, PI/Percentage's p-value against indifference.
+    #: shown treatment, PI/Percentage's p-value against indifference. For a
+    #: type that runs the Permutation Test, the headline permutation p of
+    #: each comparison whose groups are all shown, looked up (ADR-0017).
     p_values: bool = False
     #: Independent y axis per facet (ggplot's scales='free_y') — the default
     #: for unbounded metrics (movement, transitions). When on, ``y_limits``
@@ -330,63 +332,46 @@ def faceted_data(experiment, metric: str) -> pd.DataFrame:
     """Tidy per-fly data for one metric: Treatment, Phase (ordered), Value.
 
     Reads the exclusion-filtered summaries; without facet cutoffs the whole
-    recording becomes a single phase.
+    recording becomes a single phase. For a type that runs the Permutation
+    Test the headline results ride along (``attrs['headline']``) so the
+    brackets are looked up, not recomputed (ADR-0017).
     """
-    cutoffs = getattr(experiment, "facet_cutoffs", None)
-    if cutoffs:
-        summary = experiment.arena.summarize_facet(cutoffs)
-        windows: list = []
-        for w in summary["FacetRange"]:
-            if w not in windows:
-                windows.append(w)
-        exp_type = getattr(experiment, "experiment_type", None)
-        if exp_type is not None:
-            global_cfg = (getattr(experiment, "config", None) or {}).get("global") or {}
-            labels = exp_type.phase_labels_for(windows, global_cfg)
-        else:
-            labels = [str(w) for w in windows]
-        label_of = dict(zip(map(tuple, windows), labels))
-        phase = summary["FacetRange"].map(lambda w: label_of[tuple(w)])
-    else:
-        summary = experiment.arena.summarize()
-        labels = ["Whole recording"]
-        phase = pd.Series(["Whole recording"] * len(summary), index=summary.index)
+    from . import comparisons
 
-    if metric not in summary.columns:
-        return pd.DataFrame(columns=["Treatment", "Phase", "Value"])
-    df = pd.DataFrame({
-        ## fillna first: under pandas 3 astype(str) keeps NaN as NaN, so a
-        ## blank Treatment cell slipped past the != "" filter as a float.
-        "Treatment": summary["Treatment"].fillna("").astype(str).str.strip(),
-        "Phase": pd.Categorical(phase, categories=labels, ordered=True),
-        "Value": pd.to_numeric(summary[metric], errors="coerce"),
-    })
-    return _drop_unplottable(df, metric)
+    df = comparisons.experiment_tidy(experiment, metric)
+    global_cfg = (getattr(experiment, "config", None) or {}).get("global") or {}
+    headline = (comparisons.headline_for(
+        df, metric, getattr(experiment, "experiment_type", None), global_cfg)
+        if len(df) else None)
+    return _drop_unplottable(df, metric, headline)
 
 
 def faceted_data_from_combined(facet_df: pd.DataFrame, metric: str,
                                phase_labels: list[str],
-                               label_for) -> pd.DataFrame:
+                               label_for, experiment_type=None,
+                               global_cfg: dict | None = None) -> pd.DataFrame:
     """Tidy per-fly data from a Project's combined facet frame.
 
     *label_for* maps a raw ``FacetRange`` cell to its display label;
     *phase_labels* fixes the phase order. The ``Experiment`` column (when
-    present) rides along so ``mark_experiments`` can encode it.
+    present) rides along so ``mark_experiments`` can encode it — and, with
+    an *experiment_type* that runs the Permutation Test, so the headline
+    results (shuffled within replicates) can be attached for the brackets.
     """
+    from . import comparisons
+
     if metric not in facet_df.columns:
         return pd.DataFrame(columns=["Treatment", "Phase", "Value"])
-    df = pd.DataFrame({
-        "Treatment": facet_df["Treatment"].fillna("").astype(str).str.strip(),
-        "Phase": pd.Categorical(facet_df["FacetRange"].map(label_for),
-                                categories=list(phase_labels), ordered=True),
-        "Value": pd.to_numeric(facet_df[metric], errors="coerce"),
-    })
-    if "Experiment" in facet_df.columns:
-        df["Experiment"] = facet_df["Experiment"].astype(str)
-    return _drop_unplottable(df, metric)
+    df = comparisons.tidy_frame(facet_df, metric,
+                                facet_df["FacetRange"].map(label_for),
+                                list(phase_labels))
+    headline = (comparisons.headline_for(df, metric, experiment_type, global_cfg)
+                if len(df) else None)
+    return _drop_unplottable(df, metric, headline)
 
 
-def _drop_unplottable(df: pd.DataFrame, metric: str) -> pd.DataFrame:
+def _drop_unplottable(df: pd.DataFrame, metric: str,
+                      headline: dict | None = None) -> pd.DataFrame:
     """Drop rows with no treatment (an unassigned region) or no value.
 
     How many rows went for want of a treatment rides along in ``attrs``, so a
@@ -399,7 +384,21 @@ def _drop_unplottable(df: pd.DataFrame, metric: str) -> pd.DataFrame:
     kept.attrs["n_rows"] = len(df)
     kept.attrs["n_unassigned"] = int(unassigned.sum())
     kept.attrs["metric"] = metric
+    if headline is not None:
+        ## Plain tuples, not frames: attrs are compared and deep-copied by
+        ## pandas, and a DataFrame there breaks both.
+        kept.attrs["headline"] = _headline_brackets(headline)
     return kept
+
+
+def _headline_brackets(results: dict) -> list[tuple]:
+    """``(phase, a_treatment, b_treatment, p, one_sided)`` per headline
+    result; ``b`` is None for a test against indifference."""
+    rows = [(r["phase"], r["a_treatment"], r["b_treatment"], r["p_perm"],
+             bool(r["hypothesis"])) for r in results["comparisons"]]
+    rows += [(r["phase"], r["treatment"], None, r["p_perm"],
+              bool(r["hypothesis"])) for r in results["indifference"]]
+    return rows
 
 
 def data_treatments(df: pd.DataFrame) -> list[str]:
@@ -646,8 +645,16 @@ def build_ggplot(df: pd.DataFrame, spec: PlotSpec, style: PlotStyle):
     y_limits = (list(spec.y_limits)
                 if spec.y_limits is not None and not spec.free_y else None)
     if spec.p_values:
+        headline = df.attrs.get("headline")
+        pvals = None
+        if headline is not None:
+            pvals = shown_headline_pvalues(
+                headline, order, include,
+                {n: str(treatments[n].get("label", n)) for n in order},
+                {p: str(spec.facet_labels.get(p, p)) for p in include})
         layers, y_limits = _pvalue_layers(data, style, y_limits,
-                                          metric=df.attrs.get("metric"))
+                                          metric=df.attrs.get("metric"),
+                                          pvals=pvals)
         for layer in layers:
             g = g + layer
 
@@ -731,8 +738,25 @@ def facet_pvalues(data: pd.DataFrame, metric: str | None = None) -> pd.DataFrame
     return pd.DataFrame(rows, columns=["Phase", "a", "b", "p"])
 
 
+def shown_headline_pvalues(headline: list, order: list, include: list,
+                           treat_label: dict, phase_label: dict) -> pd.DataFrame:
+    """The headline p-values a figure may bracket: only results whose groups
+    are all shown, in shown phases — looked up, never recomputed, so hiding a
+    level cannot change a family and a diagonal pair never gets a bracket.
+    Columns as :func:`facet_pvalues` plus ``one_sided``, in display labels."""
+    shown = set(order)
+    rows = []
+    for phase, a, b, p, one_sided in headline:
+        if phase not in include or a not in shown \
+                or (b is not None and b not in shown):
+            continue
+        rows.append((phase_label.get(phase, phase), treat_label.get(a, a),
+                     None if b is None else treat_label.get(b, b), p, one_sided))
+    return pd.DataFrame(rows, columns=["Phase", "a", "b", "p", "one_sided"])
+
+
 def _pvalue_layers(data: pd.DataFrame, style: PlotStyle, y_limits,
-                   metric: str | None = None):
+                   metric: str | None = None, pvals: pd.DataFrame | None = None):
     """Bracket + label layers for per-facet pairwise p-values, ggpubr-style.
 
     Brackets stack above each facet's data; when explicit y-limits would clip
@@ -743,7 +767,8 @@ def _pvalue_layers(data: pd.DataFrame, style: PlotStyle, y_limits,
     """
     import plotnine as p9
 
-    pvals = facet_pvalues(data, metric)
+    if pvals is None:
+        pvals = facet_pvalues(data, metric)
     if pvals.empty:
         return [], y_limits
     levels = (list(data["Treatment"].cat.categories)
@@ -764,11 +789,13 @@ def _pvalue_layers(data: pd.DataFrame, style: PlotStyle, y_limits,
         base = float(data.loc[data["Phase"] == phase, "Value"].max())
         for k, (_, row) in enumerate(pvals[pvals["Phase"] == phase].iterrows()):
             y = base + step * (k + 0.7)
+            ## A one-sided headline p says so on the figure (ADR-0017).
+            sided = " (one-sided)" if bool(row.get("one_sided", False)) else ""
             if pd.isna(row["b"]):
                 ## vs indifference: no bracket to say what the number is,
                 ## so the label names itself.
                 x1 = x2 = xpos[row["a"]]
-                label = f"p = {row['p']:.2g}"
+                label = f"p = {row['p']:.2g}{sided}"
             else:
                 x1, x2 = xpos[row["a"]], xpos[row["b"]]
                 seg_rows += [
@@ -776,7 +803,7 @@ def _pvalue_layers(data: pd.DataFrame, style: PlotStyle, y_limits,
                     (phase, x1, x1, y, y - tick),    # left tick
                     (phase, x2, x2, y, y - tick),    # right tick
                 ]
-                label = f"{row['p']:.2g}"
+                label = f"{row['p']:.2g}{sided}"
             label_rows.append((phase, (x1 + x2) / 2, y + tick * 0.6, label))
             top = max(top, y + step * 0.6)
     segments = pd.DataFrame(seg_rows,

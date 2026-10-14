@@ -53,6 +53,9 @@ class ValenceExperimentType(ExperimentType):
     # whole experiment is noted as potentially an issue.
     # yaml `min_movement` overrides; 0 turns the flagging off.
     default_min_movement = 140.0
+    # The Permutation Test is the headline statistic (ADR-0017): Factor
+    # Comparisons, Welch/Holm beside it, and Directional Hypotheses.
+    permutation_stats = True
 
     def tracking_regions_for_rig(self, rig) -> dict | None:
         """The Valence plate: on Arena Max the first 18 wells (T_0..T_17) face
@@ -178,7 +181,18 @@ class ValenceExperimentType(ExperimentType):
             "(the middle phase); Acclimation precedes it and Cooldown follows. "
             "Flies excluded by the low-transition criterion are absent from "
             "all results; low-movement flags are advisory only (flagged flies "
-            "stay in the results)."
+            "stay in the results).\n"
+            "\nStatistics: the headline p-value of every comparison is the "
+            "permutation p (Permutation Test; Sign-Flip Test for a single "
+            "treatment) — quote it as the result and judge significance by it "
+            "alone. The Welch (and, for a Project, mixed-model) p-values "
+            "beside it are context: mention them only to say whether they "
+            "agree. With two or more design factors each factor is compared "
+            "within each level of the others (e.g. genotype within each sex). "
+            "A comparison marked with a Directional Hypothesis was tested "
+            "one-sided in the predicted direction; say so when reporting it, "
+            "and report a result in the opposite direction as not supporting "
+            "the prediction."
         )
 
     def report_sections(self, experiment) -> list:
@@ -251,7 +265,7 @@ class ValenceExperimentType(ExperimentType):
 
     def build_config(self, *, rig=None, facet_cutoffs=None, facet_labels=None,
                      factors=None, min_transitions=None, min_movement=None,
-                     **_) -> dict:
+                     hypotheses=None, **_) -> dict:
         """Full Valence config for the create wizard.
 
         Lays out the rig's DEFAULT plate with the correct X multipliers (Arena
@@ -280,6 +294,11 @@ class ValenceExperimentType(ExperimentType):
             else self.default_min_transitions
         g["min_movement"] = _clean_number(min_movement) if min_movement is not None \
             else _clean_number(self.default_min_movement)
+        # Directional Hypotheses are part of the design (ADR-0017): a replicate
+        # scaffolded from a design that declares them must carry them.
+        if hypotheses:
+            g["hypotheses"] = [dict(h) if isinstance(h, dict) else h
+                               for h in hypotheses]
 
         ## One source for the plate's geometry — the Config Editor lays out
         ## the same wells the same way (``tracking_regions_for_rig``). Blank

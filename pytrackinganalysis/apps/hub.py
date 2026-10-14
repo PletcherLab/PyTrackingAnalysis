@@ -4053,6 +4053,16 @@ class ProjectInfoDialog(QDialog):
         self.min_movement_edit = QLineEdit()
         self.min_movement_edit.setMaximumWidth(80)
         dform.addRow("min_movement (mm/min):", self.min_movement_edit)
+        ## Directional Hypotheses (ADR-0017): part of the design, so declared
+        ## here; shown only for a type that runs the Permutation Test.
+        from ._hypotheses import CAPTION as _HYP_CAPTION
+        from ._hypotheses import HypothesesEditor
+        self.hypotheses_edit = HypothesesEditor(caption=False)
+        self.hypotheses_edit.setToolTip(_HYP_CAPTION)
+        self._hypotheses_label = QLabel("Predictions:")
+        self._hypotheses_label.setToolTip(_HYP_CAPTION)
+        dform.addRow(self._hypotheses_label, self.hypotheses_edit)
+        self._loaded_hypotheses = None
         self.counting_edit = QLineEdit()
         self.counting_edit.setPlaceholderText("e.g. Light, NoLight")
         self.counting_edit.setToolTip(
@@ -4141,6 +4151,9 @@ class ProjectInfoDialog(QDialog):
                 and t.required_counting_regions:
             self.counting_edit.setText(
                 ", ".join(t.required_counting_regions))
+        has_hypotheses = bool(t.permutation_stats)
+        self._hypotheses_label.setVisible(has_hypotheses)
+        self.hypotheses_edit.setVisible(has_hypotheses)
 
     def _design_from_experiments(self, directory) -> dict:
         """Infer a design from the first experiment subdirectory (migration:
@@ -4176,6 +4189,8 @@ class ProjectInfoDialog(QDialog):
                     value = t.resolve_min_movement(g)
                     design_global["min_movement"] = \
                         int(value) if value == int(value) else value
+                if g.get("hypotheses"):
+                    design_global["hypotheses"] = g["hypotheses"]
                 design = {"global": design_global}
                 counting = list((cfg.get("counting_regions") or {}).keys())
                 if counting:
@@ -4210,6 +4225,8 @@ class ProjectInfoDialog(QDialog):
             str(g["min_movement"]) if "min_movement" in g else "")
         self.counting_edit.setText(
             ", ".join(str(n) for n in (design.get("counting_regions") or [])))
+        self.hypotheses_edit.set_hypotheses(g.get("hypotheses"))
+        self._loaded_hypotheses = g.get("hypotheses")
 
     def _build_design(self) -> dict | None:
         """The design dict from the widgets, or None after showing an error."""
@@ -4264,12 +4281,58 @@ class ProjectInfoDialog(QDialog):
                                         f"{key} must be a number.")
                     return None
                 g[key] = int(value) if value == int(value) else value
+        from .. import experiment_types as _et
+        t = _et.get_experiment_type(g.get("experiment_type"))
+        hypotheses = self.hypotheses_edit.hypotheses() \
+            if t.permutation_stats else []
+        if hypotheses:
+            problems = self.hypotheses_edit.problems(
+                factors, t.phase_labels_for_config(g))
+            if problems:
+                QMessageBox.warning(self, self.windowTitle(),
+                                    "Directional Hypotheses:\n\n"
+                                    + "\n".join(problems))
+                return None
+            g["hypotheses"] = hypotheses
         design: dict = {"global": g}
         counting = [n.strip() for n in self.counting_edit.text().split(",")
                     if n.strip()]
         if counting:
             design["counting_regions"] = counting
         return design
+
+    def _carry_hypotheses(self, directory: str, design: dict) -> None:
+        """When the design's predictions changed and the Project already has
+        replicates, offer to write them there too — otherwise every replicate
+        mismatches the design and the Project will not load."""
+        from ..comparisons import canonical_hypotheses
+
+        new = (design.get("global") or {}).get("hypotheses")
+        if canonical_hypotheses(new) == canonical_hypotheses(
+                self._loaded_hypotheses):
+            return
+        paths = self._prj.replicate_config_paths(directory)
+        stale = []
+        for path in paths:
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    g = (__import__("yaml").safe_load(handle) or {}).get(
+                        "global") or {}
+            except Exception:  # noqa: BLE001
+                continue
+            if canonical_hypotheses(g.get("hypotheses")) \
+                    != canonical_hypotheses(new):
+                stale.append(path)
+        if not stale:
+            return
+        resp = QMessageBox.question(
+            self, self.windowTitle(),
+            f"The Directional Hypotheses changed. {len(stale)} replicate(s) "
+            "still carry the old ones, and a replicate that differs from the "
+            "design stops the Project loading.\n\nWrite the new predictions "
+            "into those replicates' tracking_config.yaml now?")
+        if resp == QMessageBox.StandardButton.Yes:
+            self._prj.write_replicate_hypotheses(directory, new)
 
     def _resolve_existing_directory(self, directory: str) -> str | None:
         """The directory to initialize, or None after explaining why not.
@@ -4351,6 +4414,12 @@ class ProjectInfoDialog(QDialog):
             QMessageBox.critical(self, self.windowTitle(),
                                  f"Could not write project.yaml:\n{err}")
             return
+        try:
+            self._carry_hypotheses(directory, design)
+        except Exception as err:  # noqa: BLE001
+            QMessageBox.warning(self, self.windowTitle(),
+                                f"project.yaml was written, but the replicates "
+                                f"could not be updated:\n{err}")
         self.saved_dir = directory
         self.accept()
 

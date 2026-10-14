@@ -242,6 +242,9 @@ def validate_config(config) -> list[str]:
     # Type-specific constraints (rig subset, required Light/NoLight, owned-field
     # conflicts). Empty for a Custom Experiment.
     problems += exp_type.validate(config)
+    # Directional Hypotheses: checked for every type, so one written into a
+    # Custom config is reported rather than silently never tested.
+    problems += exp_type._validate_hypotheses(global_cfg)
 
     return problems
 

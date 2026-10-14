@@ -201,11 +201,20 @@ def test_single_treatment_is_tested_against_indifference(tmp_path):
 
     text = p.stats_text(summary, facet)
     assert "Tests against indifference" in text and "chr (n=24)" in text
+    # A Valence Project headlines the Sign-Flip Test (ADR-0017).
+    assert "sign-flip p" in text and "Sign-Flip Test" in text
+
+    headline = p.headline_results(summary, facet)
+    flip = headline["FinalPI"]["indifference"][0]
+    assert flip["treatment"] == "chr" and flip["n"] == 24
+    assert flip["p_perm"] < 0.001 and flip["significant"]
+    assert flip["p"] == pytest.approx(pi["p"])          # the t-test beside it
+    assert flip["p_mixed"] is not None
 
     model = p.build_report_model(include_ai_summary=False)
     tables = {b.title: b for b in model.blocks if isinstance(b, m.Table)}
     table = tables["Tests against indifference"]
-    assert "Pooled p" in table.columns and "Mixed p" in table.columns
+    assert table.columns[-3:] == ["Sign-flip p", "t-test p", "Mixed p"]
     assert len(table.rows) == 6
 
 
@@ -226,10 +235,11 @@ def test_project_report_model_and_pdf(tmp_path):
     assert kinds[0] == "Cover"
     tables = [b for b in model.blocks if isinstance(b, m.Table)]
     titles = [t.title for t in tables]
-    assert "Statistical comparisons (pooled + mixed model)" in titles
+    ## A Valence Project: the Permutation Test is the headline (ADR-0017).
+    assert "Statistical comparisons" in titles
     assert "Per-replicate summary" in titles
-    stats = [t for t in tables if "pooled" in (t.title or "")][0]
-    assert "Mixed p" in stats.columns
+    stats = [t for t in tables if t.title == "Statistical comparisons"][0]
+    assert stats.columns[-3:] == ["Permutation p", "Welch p", "Mixed p"]
     reps = [t for t in tables if t.title == "Per-replicate summary"][0]
     assert [r[0] for r in reps.rows] == ["Rep1", "Rep2"]
     figures = [b for b in model.blocks if isinstance(b, m.Figure)]

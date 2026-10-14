@@ -18,6 +18,8 @@ design:
     facet_labels: [Acclimation, Experiment, Cooldown]
     min_transitions: 5
     min_movement: 140
+    hypotheses:                    # optional Directional Hypotheses (Valence)
+    - expect: Mutant < CS
   counting_regions:
   - Light
   - NoLight
@@ -27,7 +29,7 @@ experiment_scripts: []
 
 - **`name`** is optional: without it, the Project's name is its folder's name. It is the display name used in the Hub, combined output filenames (`analysis/<project>_Summary.csv` and the rest), and the Project report (`<project>_report.pdf`). It is written only when you give the Project a name that differs from its folder, so a `project.yaml` copied into another folder, or a renamed folder, takes the folder's name rather than carrying the old one into output filenames.
 - **`notes`** are optional and appear near the top of the Project report.
-- **`design.global`** is the shared global design: experiment type, design factors and levels, facets, phase names, and type-specific quality criteria.
+- **`design.global`** is the shared global design: experiment type, design factors and levels, facets, phase names, type-specific quality criteria, and any Directional Hypotheses (Valence; see **Valence statistics**).
 - **`design.counting_regions`** fixes the treatment-region names and their order. Aliases stay per replicate.
 - **`scripts`** and **`experiment_scripts`** hold the two script levels - see **Scripts sections** below.
 
@@ -64,6 +66,7 @@ Hard failures include:
 - different factor levels
 - counting-region names out of order
 - any enforced `design.global` key resolving to a different value
+- different Directional Hypotheses (`hypotheses`) - compared as predictions, so `WT > Mutant` matches `Mutant < WT`, and a replicate predicting what the design does not is refused too. When **Edit config...** changes a Project's predictions, it offers to write them into every replicate.
 
 Region assignments, aliases, fly counts, and rigs may differ unless you explicitly enforce them in `design.global`.
 

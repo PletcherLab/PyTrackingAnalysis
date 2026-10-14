@@ -4,8 +4,9 @@ A Python pipeline and desktop UI for analysing insect-tracking data exported
 from DTrack. Describe each recording in `tracking_config.yaml`, group
 replicate recordings with a Project-level `project.yaml`, and the pipeline
 produces summary CSVs, statistics (pairwise between treatments, or tests
-against indifference for a single treatment), publication-quality plots, and
-PDF reports.
+against indifference for a single treatment — for Valence, a non-parametric
+Permutation Test with optional Directional Hypotheses), publication-quality
+plots, and PDF reports.
 
 ## What's included
 

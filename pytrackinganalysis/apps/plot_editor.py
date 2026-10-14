@@ -52,6 +52,25 @@ from ..ui import TopBar, app_icon, apply_theme
 from ..ui import settings as ui_settings
 
 
+
+#: P-value checkbox (text, tooltip), keyed by whether the loaded type runs
+#: the Permutation Test (ADR-0017).
+_PVALUE_TEXT = {
+    False: ("Welch / Tukey per facet",
+            "Two shown treatments: Welch's t-test; three or more: Tukey HSD. "
+            "One shown treatment: PI is tested against 0 and Percentage "
+            "against 0.5 (one-sample t-test), the p-value printed above the "
+            "group."),
+    True: ("Permutation p per facet",
+           "The headline permutation p of each comparison whose groups are "
+           "all shown, looked up from the statistics — never recomputed on "
+           "the shown treatments, so hiding one cannot change a result. "
+           "With two or more factors only within-stratum pairs get a "
+           "bracket; a Project's p is shuffled within replicates. A "
+           "one-sided result says so. One treatment: its Sign-Flip p "
+           "against indifference."),
+}
+
 class ColorButton(QPushButton):
     """A small swatch button; clicking opens a color dialog.
 
@@ -405,12 +424,8 @@ class PlotEditorWindow(QMainWindow):
         ref_holder = QWidget()
         ref_holder.setLayout(ref_row)
         sform.addRow("Reference line:", ref_holder)
-        self.pvalues_check = QCheckBox("Welch / Tukey per facet")
-        self.pvalues_check.setToolTip(
-            "Two shown treatments: Welch's t-test; three or more: Tukey HSD. "
-            "One shown treatment: PI is tested against 0 and Percentage "
-            "against 0.5 (one-sample t-test), the p-value printed above the "
-            "group.")
+        self.pvalues_check = QCheckBox(_PVALUE_TEXT[False][0])
+        self.pvalues_check.setToolTip(_PVALUE_TEXT[False][1])
         sform.addRow("P-value brackets:", self.pvalues_check)
         self.mark_check = QCheckBox("point shape per replicate")
         self.mark_check.setToolTip(
@@ -572,6 +587,12 @@ class PlotEditorWindow(QMainWindow):
         columns = (self._facet_frame.columns if self._facet_frame is not None
                    else self._experiment.arena.summarize().columns)
         self._reload_plot_combo(pf.plot_types_for(columns))
+        ## The brackets show what the loaded type's statistics headline.
+        loaded_type = (self._project or self._experiment).experiment_type
+        text, tip = _PVALUE_TEXT[bool(getattr(loaded_type, "permutation_stats",
+                                              False))]
+        self.pvalues_check.setText(text)
+        self.pvalues_check.setToolTip(tip)
         try:
             ui_settings.add_recent_project(path)
         except Exception:  # noqa: BLE001
@@ -625,7 +646,9 @@ class PlotEditorWindow(QMainWindow):
                     pf.faceted_data_from_combined(
                         self._facet_frame, metric,
                         [label_of[w] for w in windows],
-                        lambda v: label_of[self._project.parse_window(v)])
+                        lambda v: label_of[self._project.parse_window(v)],
+                        self._project.experiment_type,
+                        self._project._design_global())
             else:
                 self._data_cache[self._plot_id] = pf.faceted_data(
                     self._experiment, metric)

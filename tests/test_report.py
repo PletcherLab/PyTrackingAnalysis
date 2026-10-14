@@ -79,8 +79,13 @@ class _FakeArena:
         return self._summary.copy()
 
     def summarize_facet(self, cutoffs=None, remove_partners=False, **kw):
+        ## The windows the cutoffs make, like the real Arena (default: the
+        ## three Valence phases).
+        from pytrackinganalysis import windowing
+        windows = (list(windowing.facet_windows(cutoffs)) if cutoffs
+                   else _PHASES)
         frames = []
-        for win in _PHASES:
+        for win in windows:
             tmp = self._summary.copy()
             tmp["FacetRange"] = [win] * len(tmp)
             frames.append(tmp)
@@ -285,7 +290,11 @@ def test_single_treatment_report_tests_against_indifference(tmp_path):
     exp = _model_exp(tmp_path, exp_type_name="Valence", facet_cutoffs=[10])
     exp.arena = _FakeArena(_single_treatment_summary())
     exp.arena.experiment_name = "E"
-    tables = report_figures.build_stats_table(exp)
+    blocks = report_figures.build_stats_table(exp)
+    # The declared predictions are stated first (none here: all two-sided).
+    assert isinstance(blocks[0], m.Paragraph)
+    assert "none declared" in blocks[0].text
+    tables = [b for b in blocks if isinstance(b, m.Table)]
     assert [t.title for t in tables] == ["Tests against indifference"]
     rows = tables[0].rows
     # PI and Percentage once per phase (2 phases); movement has no null.
@@ -360,9 +369,12 @@ def test_valence_sections_have_headline_stats_and_persistence():
     titles = [getattr(b, "title", None) for b in blocks]
     assert "Headline result" in titles
     assert "Emergence & persistence" in titles
-    # Two treatments -> a Welch pairwise table for the primary phase.
+    # Two treatments -> the primary phase's PI comparison, looked up from the
+    # Permutation Test results (ADR-0017): permutation p first, Welch beside.
     tables = [b for b in blocks if isinstance(b, m.Table)]
-    assert len(tables) == 1 and "Welch" in tables[0].caption
+    assert len(tables) == 1 and "Permutation p" in tables[0].columns
+    assert "Welch p" in tables[0].columns
+    assert {r[1] for r in tables[0].rows} == {"Experiment"}
     paragraphs = [b.text for b in blocks if isinstance(b, m.Paragraph)]
     assert any("Experiment phase" in p for p in paragraphs)
 
@@ -471,13 +483,29 @@ def test_stats_file_explains_metrics_and_phases(tmp_path):
     assert "Statistical comparisons - E" in text
     assert "Valence Experiment" in text
     assert "Acclimation = 0-10 min" in text and "Cooldown = 70+ min" in text
-    assert "Welch's t-test" in text and "Tukey HSD" in text
+    # Valence headlines the Permutation Test, Welch beside it (ADR-0017).
+    assert "Permutation Test" in text and "Welch's t-test" in text
+    assert "Tukey HSD" not in text
+    assert "Fixed seed" in text and "none declared" in text
     # Each metric gets a described heading, placed before its results.
     assert "Metric: FinalPI" in text and "preference for region 1" in text
-    assert text.index("Metric: FinalPI") < text.index("RESULT for FinalPI")
+    first_result = text.index("permutation p =")
+    assert text.index("Metric: FinalPI") < first_result
+    assert "RESULT for" not in text          # not the Arena Welch/Tukey path
     assert "Metric: TotalDistancePerMin" in text and "mm/min" in text
+    # 4 vs 4 has 70 relabellings: exact, and the floor is stated.
+    assert "exact over 70 relabellings" in text
+    assert "smallest achievable p" in text
     saved = (tmp_path / "analysis" / "E_Stats.txt").read_text(encoding="utf-8")
     assert saved == text
+
+    # A Custom experiment keeps the Welch/Tukey path through Arena.
+    custom = _model_exp(tmp_path)
+    custom.arena = _StatsArena(_twochoice_summary())
+    custom.arena.experiment_name = "E"
+    text = custom.stats(save=False)
+    assert "Welch's t-test" in text and "Tukey HSD" in text
+    assert text.index("Metric: FinalPI") < text.index("RESULT for FinalPI")
 
 
 def test_report_is_titled_after_the_project_not_the_recording(tmp_path):

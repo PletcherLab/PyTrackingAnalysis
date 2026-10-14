@@ -38,7 +38,7 @@ SVG text stays editable in Illustrator. PDF output embeds fonts.
 ## Project-specific options
 
 - **Mark experiments** gives each replicate its own point shape and legend.
-- **P-value brackets** use the same treatment-comparison policy as the statistics output: Welch's t-test for two treatments and Tukey HSD for more. With only one treatment shown, PI and Percentage plots print `p = <value>` above each facet's group instead of a bracket - the test against indifference (PI 0, Percentage 50%); movement and transitions plots get no label. What counts is the treatments shown in the figure, so hiding one arm of a two-arm experiment leaves one.
+- **P-value brackets** use the same treatment-comparison policy as the statistics output: Welch's t-test for two treatments and Tukey HSD for more. With only one treatment shown, PI and Percentage plots print `p = <value>` above each facet's group instead of a bracket - the test against indifference (PI 0, Percentage 50%); movement and transitions plots get no label. What counts is the treatments shown in the figure, so hiding one arm of a two-arm experiment leaves one. **Valence** figures are different (the checkbox reads **Permutation p per facet**): each bracket is the headline permutation p, looked up from the statistics and never recomputed on what is shown. Hiding a treatment removes the brackets that need it rather than changing the others. With two or more factors only within-stratum pairs are bracketed, and a one-sided result is labelled `(one-sided)`. See **Valence statistics**.
 - **Free y** is useful for movement and transitions, where each phase may need its own scale.
 
 ## Headless rendering

@@ -90,6 +90,13 @@ TOPICS: tuple[HelpTopic, ...] = (
         "removed_regions.md",
     ),
     HelpTopic(
+        "valence_statistics",
+        "Valence statistics",
+        "The Permutation Test, Factor Comparisons, Directional Hypotheses, "
+        "and how to read the p-values.",
+        "valence_statistics.md",
+    ),
+    HelpTopic(
         "batch_run",
         "Batch runs",
         "Run a designated Project Script in every Project of a folder.",

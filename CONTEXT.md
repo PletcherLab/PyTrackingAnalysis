@@ -106,7 +106,8 @@ per-fly (per-Pair, for a pairwise tracker) tests (Welch/Tukey, matching the
 plots) beside a linear mixed model
 (treatment fixed, experiment random) that accounts for between-replicate
 variation — or, for a single treatment, a Test against Indifference with the
-same pooled + mixed pairing.
+same pooled + mixed pairing. A Valence Project adds the Permutation Test,
+shuffled within replicates, as its headline p.
 
 **Test against Indifference**:
 What a single-treatment experiment gets instead of a between-treatment
@@ -115,8 +116,78 @@ against 0.5 — the values meaning "no preference between the counting
 regions" — with a two-sided one-sample t-test. Reported in `*_Stats.txt`, the
 experiment and Project reports, and (one shown treatment, p-value option on)
 as `p = …` on the publication figures. Metrics without such a value
-(movement, transitions) have none.
+(movement, transitions) have none. In a Valence Experiment its
+non-parametric partner and headline is the **Sign-Flip Test**: each fly's
+distance from the null value has its sign flipped at random, assuming only
+that values are symmetric about the null under no preference; same p formula
+and layout as the Permutation Test.
 _Avoid_: one-sample comparison, vs-zero test
+
+**Permutation Test**:
+The non-parametric treatment comparison a Valence Experiment headlines. Per
+Phase, each tested metric (`FinalPI`, `FinalPercentage`,
+`TotalDistancePerMin`) is compared by shuffling treatment labels between
+flies — keeping the real group sizes — and locating the observed Welch t in
+the shuffled distribution. Welch t, not a raw mean difference, so a treatment
+whose flies are more variable cannot fake an effect (a studentized
+permutation test). Two-sided unless a Directional Hypothesis is declared;
+p = (shuffles at least as extreme + 1) / (shuffles + 1), never 0. Three or
+more levels in one comparison use **max-T** (each shuffle keeps its largest
+pairwise |t|), the family-wise control Tukey HSD gives; correction stops at
+the comparison, so Strata, Phases and metrics stay uncorrected as everywhere
+else. In a Combined Analysis each replicate is one more Stratum — labels move
+only between flies recorded together — so a plate effect cannot pose as a
+treatment effect; a replicate holding a single level is fixed in every
+shuffle and named. Reproducible to the digit (fixed seed; every relabelling
+when there are fewer than the shuffle count), and the output states the
+smallest achievable p when that caps the result — 3 vs 3 on one Small Arena
+plate cannot go below 0.1.
+The permutation p alone decides what is reported as significant, what a
+Publication Figure brackets (looked up, never recomputed on the treatments a
+Plot Spec shows) and what an AI Summary quotes. The parametric test always
+runs beside it so a reader can see the two agree: Welch per pair, with a Holm
+correction for three or more levels (replacing Tukey, which has no one-sided
+form), plus the mixed model in a Project. Valence policy, not a
+two-choice-tracker one: a Custom Experiment on the same tracker keeps flat
+Welch/Tukey. Lab practice before this was `2Choice_Stats.R` (ADR-0017).
+_Avoid_: simulation test, bootstrap (resampling *with* replacement is a
+different method), randomization test (fine in prose, but say Permutation
+Test in output)
+
+**Factor Comparison**:
+How a Valence Experiment with two or more declared factors is compared: each
+factor's levels against each other **within a Stratum** — the flies sharing
+every other factor's level — so a Sex × Genotype design asks Genotype within
+Female, Genotype within Male, Sex within WT and Sex within Mutant, and never
+`Female, WT` vs `Male, Mutant`. A Permutation Test shuffles labels only
+inside the Stratum, and the Welch test beside it compares the same two groups.
+With one declared factor the Treatments themselves are compared, as for any
+other type. The first statistics in the app that read factors rather than
+the flat Treatment label (ADR-0017).
+_Avoid_: main effect (that pools over the other factor), cell comparison
+
+**Directional Hypothesis**:
+An experimenter's advance declaration that one treatment's light preference
+is lower (or higher) than another's — `Mutant < WT` — which turns that
+comparison's tests one-sided in the declared direction, the Welch test as well
+as the Permutation Test. It covers `FinalPI` and `FinalPercentage` together
+(higher means more time on Light for both) in the Phases it lists, the Primary
+Phase when it lists none; every other metric, phase and comparison stays
+two-sided. With declared factors it names levels of one factor and holds in
+every Stratum (no sex-specific predictions yet); with three levels, each
+predicted pair is its own entry and undeclared pairs stay two-sided in the
+same family. A listed Phase that does not exist at the current cutoffs is a
+design error, never a silent fall-back to the Primary Phase. Part of the
+design (`project.yaml` `design:`, or `global:` for a standalone experiment)
+and hard-validated across Replicates, because a direction chosen after seeing
+the data is not a hypothesis. A result in the
+opposite direction is reported as such, with its large one-sided p. With a
+single treatment it is stated against indifference — `WT > indifference`
+(prefers Light) — and reaches the t-test and the Sign-Flip Test alike.
+Changing a Project's predictions offers to write them into its replicates,
+since a prediction depends on no replicate's data (ADR-0017).
+_Avoid_: one-tailed test (the test is one-sided *because of* the hypothesis;
+say what was predicted), expected direction
 
 **Project Report**:
 `<project>/<project>_report.pdf`: pooled publication figures rendered by the
@@ -279,7 +350,8 @@ may change):
 The phase names apply only while the cutoffs are the default; changing them
 yields plain minute-range labels instead.
 _Avoid_: facet (facet = the generic windowing mechanism; a Phase is a named
-facet at the type's default cutoffs).
+facet at the type's default cutoffs); baseline / preference / persistence
+(lab shorthand from the R scripts for the same three windows).
 
 **Primary Phase**:
 The facet window the headline result — and the Low-Transition Exclusion — is

@@ -407,9 +407,22 @@ def test_pvalue_brackets_render_and_extend_ylim(tmp_path):
     g = pf.figure_for(exp, "faceted_pi", spec, style)
     path = pf.save_ggplot(g, str(tmp_path / "p.svg"), style)
     svg = open(path, encoding="utf-8").read()
-    # A formatted p-value label made it into the vector file as text.
-    pvals = pf.facet_pvalues(pf.faceted_data(exp, "FinalPI"))
-    assert any(f"{p:.2g}" in svg for p in pvals["p"])
+    # A Valence figure brackets the headline permutation p, looked up from
+    # the statistics (ADR-0017) — it made it into the vector file as text.
+    headline = pf.faceted_data(exp, "FinalPI").attrs["headline"]
+    assert len(headline) == 3                # one pair per phase
+    assert all(f"{p:.2g}" in svg for _ph, _a, _b, p, _one in headline)
+
+    # A Custom experiment keeps the Welch/Tukey brackets, computed on the
+    # shown groups.
+    custom = _Exp(_summary(), tmp_path)
+    custom.experiment_type = et.get_experiment_type(None)
+    df = pf.faceted_data(custom, "FinalPI")
+    assert "headline" not in df.attrs
+    g = pf.figure_for(custom, "faceted_pi", spec, style)
+    svg = open(pf.save_ggplot(g, str(tmp_path / "c.svg"), style),
+               encoding="utf-8").read()
+    assert any(f"{p:.2g}" in svg for p in pf.facet_pvalues(df)["p"])
 
 
 def test_single_treatment_pvalue_is_against_indifference(tmp_path):
@@ -422,6 +435,10 @@ def test_single_treatment_pvalue_is_against_indifference(tmp_path):
     s["FinalPI"] = np.linspace(0.3, 0.7, len(s))           # clear preference
     exp = _Exp(s, tmp_path)
     df = pf.faceted_data(exp, "FinalPI")
+    # Valence: the Sign-Flip p rides along as the headline, one per phase.
+    flips = [p for _ph, a, b, p, _one in df.attrs["headline"]]
+    assert len(flips) == 3 and all(b is None for *_x, b, _p, _o in
+                                   df.attrs["headline"])
     pvals = pf.facet_pvalues(df, "FinalPI")
     assert list(pvals["Phase"]) == ["Acclimation", "Experiment", "Cooldown"]
     assert pvals["b"].isna().all() and set(pvals["a"]) == {"chr"}
@@ -445,15 +462,22 @@ def test_single_treatment_pvalue_is_against_indifference(tmp_path):
     g = pf.figure_for(exp, "faceted_pi", spec, style)
     svg = open(pf.save_ggplot(g, str(tmp_path / "one.svg"), style),
                encoding="utf-8").read()
-    assert f"p = {expected:.2g}" in svg        # no bracket, so it says "p ="
+    # No bracket, so it says "p =" — the Sign-Flip p (8 flies: exact, 256
+    # flips), not the t-test's.
+    assert f"p = {flips[0]:.2g}" in svg
 
-    # Hiding one of two treatments leaves one shown: tested the same way.
+    # Hiding one of two treatments leaves one shown. The statistics compared
+    # the two, so there is no single-treatment result to look up: nothing is
+    # recomputed on the shown subset, and no p is drawn.
     two = pf.faceted_data(_Exp(_summary(), tmp_path), "FinalPercentage")
     hidden = pf.default_spec("faceted_percentage")
     hidden.p_values = True
     hidden.treatments = {"chr": {"label": "chr", "show": True},
                          "control": {"label": "control", "show": False}}
     pf.build_ggplot(two, hidden, style)                      # renders
+    assert pf.shown_headline_pvalues(two.attrs["headline"], ["chr"],
+                                     ["Acclimation", "Experiment", "Cooldown"],
+                                     {"chr": "chr"}, {}).empty
 
 
 def test_boxplot_and_boxed_strip_render(tmp_path):
