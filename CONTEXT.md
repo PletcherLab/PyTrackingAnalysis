@@ -127,27 +127,33 @@ _Avoid_: one-sample comparison, vs-zero test
 The non-parametric treatment comparison a Valence Experiment headlines. Per
 Phase, each tested metric (`FinalPI`, `FinalPercentage`,
 `TotalDistancePerMin`) is compared by shuffling treatment labels between
-flies — keeping the real group sizes — and locating the observed Welch t in
-the shuffled distribution. Welch t, not a raw mean difference, so a treatment
-whose flies are more variable cannot fake an effect (a studentized
-permutation test). Two-sided unless a Directional Hypothesis is declared;
+flies — keeping the real group sizes — and locating the observed
+**replicate-adjusted Welch t** in the shuffled distribution: each pair's
+contrast in Value ~ replicate + treatment (replicate a fixed effect), over a
+heteroscedasticity-robust (HC2) standard error. With one replicate that is
+Welch's t exactly. Studentized, not a raw mean difference, so a treatment
+whose flies are more variable cannot fake an effect; signed, not an F, so a
+Directional Hypothesis keeps its direction. Two-sided unless one is declared;
 p = (shuffles at least as extreme + 1) / (shuffles + 1), never 0. Three or
 more levels in one comparison use **max-T** (each shuffle keeps its largest
 pairwise |t|), the family-wise control Tukey HSD gives; correction stops at
 the comparison, so Strata, Phases and metrics stay uncorrected as everywhere
 else. In a Combined Analysis each replicate is one more Stratum — labels move
-only between flies recorded together — so a plate effect cannot pose as a
-treatment effect; a replicate holding a single level is fixed in every
-shuffle and named. Reproducible to the digit (fixed seed; every relabelling
+only between flies recorded together, and the replicate term takes its offset
+out of the statistic — so a plate effect can neither pose as a treatment
+effect nor hide one; a replicate holding a single level is fixed in every
+shuffle and named, and a pair never recorded in a shared replicate is not
+estimable and not tested. Reproducible to the digit (fixed seed; every relabelling
 when there are fewer than the shuffle count), and the output states the
 smallest achievable p when that caps the result — 3 vs 3 on one Small Arena
 plate cannot go below 0.1.
 The permutation p alone decides what is reported as significant, what a
 Publication Figure brackets (looked up, never recomputed on the treatments a
 Plot Spec shows) and what an AI Summary quotes. The parametric test always
-runs beside it so a reader can see the two agree: Welch per pair, with a Holm
-correction for three or more levels (replacing Tukey, which has no one-sided
-form), plus the mixed model in a Project. Valence policy, not a
+runs beside it so a reader can see the two agree: the same t on a t
+distribution (Satterthwaite df; Welch's t-test for one experiment, the
+**model p** in a Project), Holm-corrected for three or more levels (replacing
+Tukey, which has no one-sided form), plus the mixed model in a Project. Valence policy, not a
 two-choice-tracker one: a Custom Experiment on the same tracker keeps flat
 Welch/Tukey. Lab practice before this was `2Choice_Stats.R` (ADR-0017).
 _Avoid_: simulation test, bootstrap (resampling *with* replacement is a

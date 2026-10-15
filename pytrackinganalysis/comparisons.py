@@ -40,7 +40,37 @@ INDIFFERENCE = "indifference"
 
 ALPHA = 0.05
 
-_EXPECT = re.compile(r"^\s*(.+?)\s*([<>])\s*(.+?)\s*$")
+#: The comparison sign with whitespace on both sides — how a name that itself
+#: holds '>' (fly genotypes: 'Nanchung>Chrimson') stays one name.
+_SPACED_SIGN = re.compile(r"\s+([<>])\s+")
+
+
+def split_expect(text: str) -> tuple[str, str, str] | None:
+    """``'A < B'`` → ``('A', '<', 'B')``, or None when it is not one
+    comparison. A sign with spaces around it is the comparison, so names may
+    contain '<' or '>' ('Nanchung>Chrimson > WCS>Chrimson'); without spaces
+    the text may hold only the one sign ('Mutant<WT')."""
+    text = str(text or "").strip()
+    spaced = list(_SPACED_SIGN.finditer(text))
+    if len(spaced) == 1:
+        m = spaced[0]
+        left, right = text[:m.start()].strip(), text[m.end():].strip()
+        op = m.group(1)
+    elif not spaced and text.count("<") + text.count(">") == 1:
+        op = "<" if "<" in text else ">"
+        left, right = (part.strip() for part in text.split(op))
+    else:
+        return None
+    if not left or not right:
+        return None
+    return left, op, right
+
+
+def normalize_expect(text: str) -> str:
+    """The prediction as written, with single spaces around its sign — the
+    form the editors save ('Mutant<WT' → 'Mutant < WT')."""
+    parts = split_expect(text)
+    return f"{parts[0]} {parts[1]} {parts[2]}" if parts else str(text).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -54,10 +84,14 @@ class Hypothesis:
     low: str
     high: str
     phases: tuple[str, ...] | None = None
+    #: The prediction as the design writes it (spacing normalised), shown to
+    #: readers — 'Nanchung>Chrimson > WCS>Chrimson' reads as intended, its
+    #: rewritten form 'WCS>Chrimson < Nanchung>Chrimson' does not.
+    written: str = ""
 
     @property
     def text(self) -> str:
-        return f"{self.low} < {self.high}"
+        return self.written or f"{self.low} < {self.high}"
 
     def covers(self, metric: str, phase: str, primary: str | None) -> bool:
         if metric not in DIRECTIONAL_METRICS:
@@ -96,14 +130,14 @@ def parse_hypothesis(entry) -> tuple[Hypothesis | None, str | None]:
                       f"key(s) {', '.join(sorted(map(str, unknown)))}; only "
                       "'expect' and 'phases' are allowed")
     expect = entry.get("expect")
-    match = _EXPECT.match(str(expect or ""))
-    if not match or not match.group(1) or not match.group(3):
+    parts = split_expect(expect)
+    if parts is None:
         return None, (f"hypothesis 'expect: {expect}' must read 'A < B' or "
-                      "'A > B' (levels of one factor, or a treatment against "
-                      "'indifference')")
-    left, op, right = match.groups()
-    if "<" in left + right or ">" in left + right:
-        return None, f"hypothesis 'expect: {expect}' compares more than two groups"
+                      "'A > B' — one comparison, levels of one factor or a "
+                      "treatment against 'indifference'. When a name holds "
+                      "'<' or '>' itself, put spaces around the comparison "
+                      "sign only: 'Nanchung>Chrimson > WCS>Chrimson'.")
+    left, op, right = parts
     low, high = (left, right) if op == "<" else (right, left)
     if low == high:
         return None, f"hypothesis 'expect: {expect}' compares a group with itself"
@@ -120,7 +154,8 @@ def parse_hypothesis(entry) -> tuple[Hypothesis | None, str | None]:
                           "non-empty list of phase names (omit it for the "
                           "Primary Phase)")
         phases = tuple(str(p).strip() for p in phases)
-    return Hypothesis(low=low, high=high, phases=phases), None
+    return Hypothesis(low=low, high=high, phases=phases,
+                      written=f"{left} {op} {right}"), None
 
 
 def parse_hypotheses(raw) -> tuple[list[Hypothesis], list[str]]:
@@ -282,6 +317,13 @@ def plan(treatments: list[str], factors: dict) -> tuple[list[Comparison], list[s
                          "Treatments are compared directly instead of within "
                          "strata.")
         only = varying[0] if len(varying) == 1 and not unreadable else None
+        if only:
+            ## The design's level order, as Factor Comparisons use: the first
+            ## declared level is A, so B − A reads against it (a control
+            ## listed first is the reference), whatever order the data came in.
+            order = factors[only]
+            treatments = sorted(treatments, key=lambda t: order.index(parsed[t][only])
+                                if parsed[t][only] in order else len(order))
         names = [parsed[t].get(only, t) if only else t for t in treatments]
         if len(set(names)) != len(names):
             names = treatments
@@ -338,15 +380,17 @@ def _sides(comparison: Comparison, pairs, design: Design, metric: str,
 
 
 def compare(data: pd.DataFrame, comparison: Comparison, metric: str,
-            phase: str, design: Design) -> list[dict]:
-    """The rows of one comparison: every pair with its permutation, Welch and
-    — with two or more replicates — mixed-model p. *data* holds Treatment /
-    Value [/ Experiment] rows with values (NaN already dropped)."""
+            phase: str, design: Design) -> tuple[list[dict], list[str]]:
+    """The rows of one comparison: every pair with its permutation p, the
+    parametric p of the same replicate-adjusted Welch t, and — with two or
+    more replicates — the mixed-model p. *data* holds Treatment / Value
+    [/ Experiment] rows with values (NaN already dropped). Returns
+    ``(rows, notes)``; a note names any pair that could not be estimated."""
     sub = data[data["Treatment"].isin(comparison.groups)]
     counts = sub["Treatment"].value_counts()
     keep = [i for i, t in enumerate(comparison.groups) if counts.get(t, 0) >= 2]
     if len(keep) < 2:
-        return []
+        return [], []
     groups = [comparison.groups[i] for i in keep]
     names = [comparison.names[i] for i in keep]
     comp = Comparison(groups=groups, names=names, factor=comparison.factor,
@@ -362,14 +406,21 @@ def compare(data: pd.DataFrame, comparison: Comparison, metric: str,
     perm = permutation.permutation_test(values, codes, strata=strata,
                                         pairs=pairs, sides=sides)
     samples = [values[codes == i] for i in range(len(groups))]
-    welch = permutation.welch_family(samples, pairs, sides)
+    param = permutation.parametric_family(values, codes, strata, pairs, sides)
+    live = [c for c in range(len(pairs)) if perm["estimable"][c]]
+    notes = [f"{phase}, {comp.label}: {names[i]} and {names[j]} were never "
+             "recorded in the same replicate, so their difference cannot be "
+             "separated from the replicates' and is not tested."
+             for c, (i, j) in enumerate(pairs) if not perm["estimable"][c]]
     mixed_p = [None] * len(pairs)
-    if strata is not None and len(set(strata)) > 1:
-        raw = [mixed_p_value(sub, groups[i], groups[j], side)
-               for (i, j), side in zip(pairs, sides)]
+    if strata is not None and len(set(strata)) > 1 and live:
+        ## Holm over the same family as the other columns: estimable pairs.
+        raw = [mixed_p_value(sub, groups[pairs[c][0]], groups[pairs[c][1]],
+                             sides[c]) for c in live]
         if any(p is not None for p in raw):
             adjusted = permutation.holm([np.nan if p is None else p for p in raw])
-            mixed_p = [None if p is None else q for p, q in zip(raw, adjusted)]
+            for c, p, q in zip(live, raw, adjusted):
+                mixed_p[c] = None if p is None else q
 
     fixed: list[str] = []
     if strata is not None:
@@ -378,7 +429,8 @@ def compare(data: pd.DataFrame, comparison: Comparison, metric: str,
                 fixed.append(str(rep))
 
     rows = []
-    for c, (i, j) in enumerate(pairs):
+    for c in live:
+        i, j = pairs[c]
         a, b = samples[i], samples[j]
         rows.append({
             "metric": metric, "phase": phase,
@@ -393,14 +445,15 @@ def compare(data: pd.DataFrame, comparison: Comparison, metric: str,
             "t": perm["t"][c],
             "side": permutation.SIDE_NAMES[sides[c]],
             "hypothesis": texts[c],
-            "p_perm": perm["p"][c], "p_welch": welch[c], "p_mixed": mixed_p[c],
+            "p_perm": perm["p"][c], "p_param": param[c], "p_mixed": mixed_p[c],
             "significant": bool(perm["p"][c] < ALPHA),
-            "family": len(pairs),
+            "family": len(live),
             "exact": perm["exact"], "relabellings": perm["relabellings"],
             "p_floor": perm["p_floor"],
             "fixed_replicates": fixed,
+            "replicate_adjusted": strata is not None and len(set(strata)) > 1,
         })
-    return rows
+    return rows, notes
 
 
 def against_indifference(data: pd.DataFrame, treatment: str, metric: str,
@@ -550,8 +603,10 @@ def _phase_results(tidy: pd.DataFrame, metric: str, design: Design) -> dict:
         for note in notes:
             _note(out, note)
         for comparison in comparisons:
-            rows = compare(data, comparison, metric, str(phase), design)
-            if not rows:
+            rows, pair_notes = compare(data, comparison, metric, str(phase), design)
+            for note in pair_notes:
+                _note(out, note)
+            if not rows and not pair_notes:
                 _note(out, f"{phase}: {comparison.label} not tested — fewer than "
                            "two groups have at least two flies with a value.")
             out["comparisons"] += rows
@@ -723,17 +778,25 @@ def method_lines(design: Design, project: bool = False) -> list[str]:
 
     shuffle = ("labels shuffled within each replicate and stratum" if project
                else "labels shuffled within each stratum")
+    statistic = (
+        "the replicate-adjusted Welch t of each pair (its contrast in Value ~ "
+        "replicate + treatment, replicate a fixed effect, over a "
+        "heteroscedasticity-robust HC2 standard error; signed, so a one-sided "
+        "test stays one-sided)" if project else "the Welch t of each pair")
     paragraphs = [
-        "Headline test: Permutation Test — the Welch t of each pair located "
-        f"among {permutation.SHUFFLES:,} relabellings of the flies ({shuffle}; "
+        f"Headline test: Permutation Test — {statistic}, located among "
+        f"{permutation.SHUFFLES:,} relabellings of the flies ({shuffle}; "
         "every relabelling keeps the real group sizes). Three or more levels "
         "in one comparison: max-T, family-wise like Tukey. When there are "
         "fewer distinct relabellings than that, every one is enumerated "
         f"(exact p). Fixed seed {permutation.SEED}: a re-run reproduces every "
         "p exactly.",
-        "Beside it: Welch's t-test (Holm-adjusted for three or more levels)"
-        + (" and a linear mixed model (replicate random intercept)."
-           if project else "."),
+        ("Beside it: model p, the same replicate-adjusted Welch t on a t "
+         "distribution (Satterthwaite df), and a linear mixed model "
+         "(replicate random intercept); both Holm-adjusted for three or more "
+         "levels. With a single replicate the model p is Welch's t-test."
+         if project else
+         "Beside it: Welch's t-test (Holm-adjusted for three or more levels)."),
         "One treatment level: Sign-Flip Test of PI against 0 and Percentage "
         "against 0.5 (assumes values symmetric about the null under no "
         "preference), beside the one-sample t-test.",

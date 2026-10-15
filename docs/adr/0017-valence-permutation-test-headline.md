@@ -106,3 +106,46 @@ shuffling Pairs (ADR-0013).
   recalculated on what is shown.
 - An exact test on small plates can be unable to reach 0.05. The output
   says so rather than letting `p = 0.1` read as "nearly significant".
+
+## Amendment (2026-10-15): the statistic adjusts for replicate
+
+The first version shuffled labels within replicates but computed a **pooled**
+Welch t over all flies. That was valid, since the replicate effect sat in the
+observed and the shuffled t alike. But between-replicate spread stayed in the
+standard error, which cost power when replicates differ in level. On the
+Nanchung Project, Baseline movement moved from p = 0.56 to 0.52 once
+replicate was adjusted for.
+
+**Decision.** The statistic is now each pair's contrast in
+`Value ~ replicate + treatment` (replicate a fixed effect), over a
+heteroscedasticity-robust **HC2** standard error.
+
+- **Shuffling is unchanged:** labels still move only within a replicate.
+- **One replicate is Welch's t exactly**, so single-experiment results are
+  unchanged.
+- **It is signed,** so Directional Hypotheses stay one-sided.
+- **Speed:** within-replicate shuffles keep every replicate × treatment cell
+  count fixed, so (X'X)⁻¹, each cell's leverage and each contrast's weights
+  are the same for every relabelling. A shuffle costs a few matrix products.
+
+**The Project's parametric column** becomes the same t on a t distribution,
+labelled **Model p**. Its df are Satterthwaite, built per replicate ×
+treatment cell, which is Welch–Satterthwaite with one replicate. The mixed
+model stays beside it.
+
+**Rejected:**
+
+- **The classic ANOVA F for genotype.** It is t², so it loses the sign and
+  with it one-sided tests. Its pooled residual variance also brings back the
+  equal-variance assumption the Welch t was chosen to avoid. With 26 v 31 flies
+  that alone moved Exposure PI from 0.080 to 0.068.
+- **Centring each replicate before a pooled t.** It is not exact when
+  treatment proportions differ between replicates, which the model handles.
+
+**Consequence.** A pair never recorded in a shared replicate has no
+within-replicate difference to estimate. It is reported as not testable,
+instead of the pooled comparison that confounded it with the replicates.
+
+**Also in this amendment.** A prediction's comparison sign may have spaces
+around it, so names that hold `>` themselves stay whole:
+`Nanchung>Chrimson > WCS>Chrimson`.

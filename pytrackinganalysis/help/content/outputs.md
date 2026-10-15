@@ -33,7 +33,7 @@ Project-level outputs are written at the Project root. `<project>` is the Projec
 - `analysis/<project>_Summary.csv` - Combined Analysis: filtered replicate summaries stacked with an `Experiment` column.
 - `analysis/<project>_Summary_Facet.csv` - combined faceted summaries, when available.
 - `analysis/<project>_Excluded.csv` - excluded flies across replicates.
-- `analysis/<project>_Stats.txt` - pooled per-fly tests plus mixed-model p-values that account for replicate-to-replicate variation (for Valence, the permutation p comes first, with labels shuffled within each replicate). With only one treatment, a **Tests against indifference** section tests PI and Percentage the same two ways: all flies pooled, and an intercept-only mixed model with a per-experiment random intercept (only with two or more replicates).
+- `analysis/<project>_Stats.txt` - pooled per-fly tests plus mixed-model p-values that account for replicate-to-replicate variation (for Valence, the permutation p comes first, with labels shuffled within each replicate and the statistic adjusted for replicate, followed by the same model's **Model p** and the mixed-model p). With only one treatment, a **Tests against indifference** section tests PI and Percentage the same two ways: all flies pooled, and an intercept-only mixed model with a per-experiment random intercept (only with two or more replicates).
 - `analysis/<project>_AI_Summary.txt` - optional Project AI narrative; deleted by the next Combined Analysis build and then recreated by **AI narrative...** when requested.
 - `plot_specs.yaml` - Plot Editor specs and styles.
 - `figures/*.svg` and `figures/*.pdf` - pooled publication figures.

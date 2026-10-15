@@ -27,11 +27,23 @@ No correction is applied across phases, strata or metrics.
 
 ## In a Project
 
-Labels are shuffled **within each replicate**, so a replicate whose flies all happen to prefer Light cannot pose as a treatment effect. This is the non-parametric counterpart of the mixed model, whose p sits beside the permutation p and the Welch p. A replicate holding only one level of a comparison (an all-WT plate, say) can swap nothing. Its flies keep their labels in every shuffle, and Stats.txt names it.
+Two things change when there are several replicates:
+
+- **Shuffles stay within each replicate.** Labels move only between flies recorded together, so a replicate whose flies all happen to prefer Light cannot pose as a treatment effect.
+- **The statistic adjusts for replicate.** In place of a t over all flies pooled, each comparison uses the treatment's effect in the model `Value ~ replicate + treatment`, with replicate as a fixed effect. Its standard error is heteroscedasticity-robust (HC2), so unequal spreads are still handled the way Welch's t handles them. A replicate whose flies all run high or low no longer inflates the noise the comparison is measured against. With a single replicate this statistic is exactly Welch's t.
+
+The statistic is signed (it is the t, not an F), so a declared direction stays one-sided.
+
+Beside the permutation p, the Project shows:
+
+- **Model p:** the same t on a t distribution.
+- **Mixed p:** from a mixed model with replicate as a random effect.
+
+A replicate holding only one level of a comparison (an all-WT plate, say) can swap nothing. Its flies keep their labels in every shuffle, and Stats.txt names it. If two treatments were never recorded in the same replicate, their difference cannot be separated from the replicate's, and the pair is reported as not testable.
 
 ## Directional Hypotheses
 
-Two-sided by default. If you predicted a direction **before the data existed**, declare it in the design and that comparison becomes one-sided. This applies to the permutation, Welch and mixed-model p alike.
+Two-sided by default. If you predicted a direction **before the data existed**, declare it in the design and that comparison becomes one-sided. This applies to the permutation, Welch (or model) and mixed-model p alike. A name that holds `>` itself, as fly genotypes often do, works when the comparison sign has spaces around it: `Nanchung>Chrimson > WCS>Chrimson`.
 
 ```
 global:

@@ -957,7 +957,7 @@ class Project:
             wc = width([r["comparison"] for _m, r in rows], "Comparison", 24)
             comp = f"{'Comparison':<{wc}} " if stratified else ""
             header = (f"{'Metric':<20} {'Phase':<{wp}} {comp}{'A':<{wa}} "
-                      f"{'B':<{wb}} {'diff':>8} {'perm p':>16} {'Welch p':>10} "
+                      f"{'B':<{wb}} {'diff':>8} {'perm p':>16} {'model p':>10} "
                       f"{'mixed p':>10}")
             lines += [header, "-" * len(header)]
             for (metric, r), a, b in zip(rows, a_cells, b_cells):
@@ -966,7 +966,7 @@ class Project:
                 lines.append(
                     f"{metric:<20} {r['phase']:<{wp}} {comp}{a:<{wa}} {b:<{wb}} "
                     f"{r['diff']:>+8.3f} {perm:>16} "
-                    f"{comparisons.p_text(r, 'p_welch'):>10} "
+                    f"{comparisons.p_text(r, 'p_param'):>10} "
                     f"{comparisons.p_text(r, 'p_mixed'):>10}")
         one = [(m, r) for m, res in results.items() for r in res["indifference"]]
         if one:

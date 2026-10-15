@@ -30,7 +30,7 @@ The +1 means p is never 0, and its smallest value shows the test's resolution.
 - **Welch t, not a plain mean difference,** so a treatment whose flies are more variable cannot fake an effect.
 - **Two factors** (e.g. Sex × Genotype): each factor is compared within each level of the other: Genotype within Female, Genotype within Male, Sex within WT, Sex within Mutant. Labels are only shuffled among flies sharing the other factor's level. `Female, WT` is never compared with `Male, Mutant`.
 - **Three or more levels** (e.g. WT, MutA, MutB): **max-T**, where each shuffle keeps its most extreme pair. This controls false positives across the pairs, like Tukey HSD. The Welch column beside it is Holm-adjusted.
-- **In a Project,** labels are shuffled only within each replicate, so a plate whose flies all happen to like Light cannot pose as a treatment effect.
+- **In a Project,** labels are shuffled only within each replicate, and the t adjusts for replicate. It is the treatment's effect in `Value ~ replicate + treatment` (replicate a fixed effect), over a heteroscedasticity-robust (HC2) standard error. A plate whose flies all happen to like Light can neither pose as a treatment effect nor add noise that hides one. With one replicate this is exactly Welch's t, and it stays signed, so one-sided tests still work. Two treatments never recorded in the same replicate can't be separated from the replicates, and are reported as not testable.
 - **One treatment:** a **Sign-Flip Test** of PI against 0 and Percentage against 0.5. Each fly's distance from the null has its sign flipped at random. It assumes only that values are symmetric about the null when there is no preference.
 
 There is no correction across phases, strata or metrics, as before.
@@ -55,6 +55,7 @@ global:                      # design: → global: in project.yaml
 **Rules**
 
 - Name levels of **one** factor (`Mutant < WT`, not `Mutant < Male`). With two factors, the prediction holds within every level of the other one.
+- Names that contain `>` themselves are fine. Put spaces around the comparison sign only: `Nanchung>Chrimson > WCS>Chrimson`.
 - It covers `FinalPI` and `FinalPercentage` only; higher means more time on Light for both. Movement is always two-sided.
 - Leaving out `phases` means the Primary Phase (Experiment, 10–70 min). If you change the facet cutoffs, the default phase names go away, so update `phases` too.
 - With three levels, write one entry per predicted pair. Pairs you don't predict stay two-sided.
@@ -71,13 +72,13 @@ The permutation p is written everywhere statistics already were. Run the analysi
 | --- | --- | --- |
 | Experiment stats | `analysis/<exp>_Stats.txt` | A header with the method, seed and declared predictions, then per phase and comparison: group n, mean and sd, the difference (B − A), `permutation p` with how it was obtained (exact or 100,000 shuffles; one-sided and which prediction), and `Welch p` |
 | Experiment report | `<exp>_report.pdf` | A sentence naming any Directional Hypotheses, then the **Statistical comparisons** table, and **Tests against indifference** for one treatment |
-| Project stats | `analysis/<project>_Stats.txt` | One row per metric × phase × pair: perm p, Welch p, mixed p; replicates fixed in every shuffle are listed |
-| Project report | `<project>_report.pdf` | The same tables pooled across replicates, with a Mixed p column |
+| Project stats | `analysis/<project>_Stats.txt` | One row per metric × phase × pair: perm p, model p, mixed p; replicates fixed in every shuffle are listed |
+| Project report | `<project>_report.pdf` | The same tables pooled across replicates, with **Model p** (the replicate-adjusted t on a t distribution) and **Mixed p** (replicate as a random effect) |
 
 **Reading the report table**
 
 - **Permutation p** is the headline. It alone decides **Significant** and the green row highlight.
-- **Welch p** (and **Mixed p** in a Project) is context. When they agree, good; when they disagree, look at the data.
+- **Welch p** in an experiment, **Model p** and **Mixed p** in a Project, are context. When they agree, good; when they disagree, look at the data.
 - **Comparison** appears with two or more factors, e.g. `genotype within Female`.
 - **†** after a p means it was tested one-sided; the caption names the prediction.
 - **(min 0.1)** after a p means an exact test with so few flies that no smaller p was possible.

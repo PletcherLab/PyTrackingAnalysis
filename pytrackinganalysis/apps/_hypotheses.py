@@ -121,11 +121,7 @@ class HypothesesEditor(QWidget):
                       if p.strip()]
             if not expect:
                 continue
-            hyp, problem = comparisons.parse_hypothesis({"expect": expect})
-            if hyp is not None and problem is None:
-                expect = f"{hyp.low} < {hyp.high}" \
-                    if "<" in expect else f"{hyp.high} > {hyp.low}"
-            entry: dict = {"expect": expect}
+            entry: dict = {"expect": comparisons.normalize_expect(expect)}
             if phases:
                 entry["phases"] = phases
             out.append(entry)

@@ -92,6 +92,19 @@ def test_validate_hypotheses_against_the_design():
                                  PHASES) == []
 
 
+def test_names_holding_the_comparison_sign():
+    # Fly genotypes are written Gal4>UAS: spaces mark the comparison sign.
+    genotypes = {"Genotype": ["WCS>Chrimson", "Nanchung>Chrimson"]}
+    hyps, problems = C.parse_hypotheses(["Nanchung>Chrimson > WCS>Chrimson"])
+    assert not problems
+    assert (hyps[0].low, hyps[0].high) == ("WCS>Chrimson", "Nanchung>Chrimson")
+    assert C.validate_hypotheses(["Nanchung>Chrimson > WCS>Chrimson"],
+                                 genotypes, PHASES) == []
+    _, problems = C.parse_hypotheses(["Nanchung>Chrimson>WCS>Chrimson"])
+    assert "put spaces around the comparison sign" in problems[0]
+    assert C.normalize_expect("Mutant<WT") == "Mutant < WT"
+
+
 def test_canonical_hypotheses_ignore_order_spacing_and_direction():
     a = [{"expect": "Mutant<WT"}, "Female > Male"]
     b = ["Male < Female", {"expect": "WT > Mutant"}]
@@ -124,9 +137,15 @@ def test_one_varying_factor_compares_the_treatments_flat():
                       {"sex": ["Female"], "genotype": ["WT", "Mutant", "Rescue"]})
     assert len(plans) == 1 and plans[0].factor is None
     assert plans[0].names == ["WT", "Mutant", "Rescue"]
-    # No factors declared: the labels themselves.
-    plans, _ = C.plan(["a", "b"], {})
-    assert plans[0].names == ["a", "b"]
+    # The design's level order sets A and B, not the order the data came in:
+    # the first declared level is the reference, so B − A reads against it.
+    plans, _ = C.plan(["Female, Nanchung>Chrimson", "Female, WCS>Chrimson"],
+                      {"Sex": ["Male", "Female"],
+                       "Genotype": ["WCS>Chrimson", "Nanchung>Chrimson"]})
+    assert plans[0].names == ["WCS>Chrimson", "Nanchung>Chrimson"]
+    # No factors declared: the labels themselves, in data order.
+    plans, _ = C.plan(["b", "a"], {})
+    assert plans[0].names == ["b", "a"]
     # Labels that do not name every factor fall back to flat, and say so.
     plans, notes = C.plan(["Female, WT", "Male, Mutant", "Male"], FACTORS)
     assert len(plans) == 1 and plans[0].factor is None and notes
@@ -147,7 +166,7 @@ def test_hypothesis_sides_only_its_metrics_and_phases():
     assert exp_one["side"] == "less" and exp_one["hypothesis"] == "Mutant < WT"
     assert exp_one["diff"] < 0                       # the predicted direction
     assert exp_one["p_perm"] < exp_two["p_perm"]
-    assert exp_one["p_welch"] == pytest.approx(exp_two["p_welch"] / 2)
+    assert exp_one["p_param"] == pytest.approx(exp_two["p_param"] / 2)
     # Primary Phase only by default; the sex comparisons are not predicted.
     assert row(one, "Acclimation", "genotype within Female")["side"] == "two-sided"
     assert row(one, "Experiment", "sex within WT")["side"] == "two-sided"
@@ -225,6 +244,19 @@ def test_replicates_are_strata_and_get_the_mixed_model():
     row = next(r for r in res["comparisons"]
                if r["comparison"] == "genotype within Female")
     assert row["fixed_replicates"] == ["Rep0"]
+
+
+def test_a_pair_never_in_a_shared_replicate_is_not_tested():
+    rng = np.random.default_rng(2)
+    rows = [{"Treatment": t, "Phase": "Experiment", "Experiment": rep,
+             "Value": rng.normal()}
+            for t, rep in (("WT", "R1"), ("Mutant", "R2")) for _ in range(5)]
+    tidy = pd.DataFrame(rows)
+    tidy["Phase"] = pd.Categorical(tidy["Phase"], ["Experiment"])
+    res = C.phase_results(tidy, "FinalPI",
+                          _design(factors={"genotype": ["WT", "Mutant"]}))
+    assert res["comparisons"] == []
+    assert "never recorded in the same replicate" in res["notes"][0]
 
 
 def test_results_are_cached_by_content_whatever_the_row_order():
@@ -462,7 +494,7 @@ def test_project_headline_is_shuffled_within_replicates(tmp_path):
     model = p.build_report_model(include_ai_summary=False)
     table = next(b for b in model.blocks if isinstance(b, m.Table)
                  and b.title == "Statistical comparisons")
-    assert table.columns[-3:] == ["Permutation p", "Welch p", "Mixed p"]
+    assert table.columns[-3:] == ["Permutation p", "Model p", "Mixed p"]
     # The figure data of the same Project carries the same p.
     windows, label_of = p.window_labels(facet)
     df = pf.faceted_data_from_combined(

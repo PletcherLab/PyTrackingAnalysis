@@ -1412,7 +1412,7 @@ class Experiment:
             print(f"    diff (B - A) = {r['diff']:+.4g}, Welch t = {r['t']:.3f}")
             print(f"    permutation p = {comparisons.p_text(r)}  "
                   f"[{_test_detail(r)}{family}]")
-            print(f"    Welch p       = {comparisons.p_text(r, 'p_welch')}")
+            print(f"    Welch p       = {comparisons.p_text(r, 'p_param')}")
             if r.get("fixed_replicates"):
                 print(f"    note: {', '.join(r['fixed_replicates'])} hold(s) a "
                       "single level here — fixed in every shuffle.")

@@ -840,7 +840,7 @@ def permutation_tables(results: dict, tier_of: dict | None = None,
             cells += [f"{r['a']} (n={r['n_a']})", f"{r['b']} (n={r['n_b']})",
                       f"{r['diff']:+.3f}",
                       comparisons.p_text(r) + mark,
-                      comparisons.p_text(r, "p_welch")]
+                      comparisons.p_text(r, "p_param")]
             if project:
                 cells.append(comparisons.p_text(r, "p_mixed"))
             else:
@@ -877,22 +877,28 @@ def permutation_tables(results: dict, tier_of: dict | None = None,
         if stratified:
             columns.append("Comparison")
         columns += ["Group A", "Group B", "Mean diff (B − A)",
-                    "Permutation p", "Welch p"]
+                    "Permutation p", "Model p" if project else "Welch p"]
         columns.append("Mixed p" if project else "Significant")
         if tier_of:
             columns.insert(1, "Tier")
             rows = [[row[0], tier_of.get(row[0], "")] + row[1:] for row in rows]
         caption = (
-            "Permutation p: the headline — each pair's Welch t located among "
-            f"{_shuffles_text()} relabellings of the flies"
+            "Permutation p: the headline — each pair's "
+            + ("replicate-adjusted Welch t (its contrast in Value ~ replicate "
+               "+ treatment, over a heteroscedasticity-robust standard error) "
+               if project else "Welch t ")
+            + f"located among {_shuffles_text()} relabellings of the flies"
             + (", shuffled within each replicate" if project else "")
             + (" and within each stratum of the other factors (each factor is "
                "compared within every level of the others)" if stratified else "")
             + "; max-T across the pairs of a comparison with three or more "
             "levels. It alone decides significance (α = 0.05, highlighted). "
-            "Welch p: Welch's t-test, Holm-adjusted with three or more levels"
-            + ("; Mixed p: linear mixed model with a per-replicate random "
-               "intercept — context, as Welch is" if project else " — context")
+            + ("Model p: the same t on a t distribution (Satterthwaite df); "
+               "Mixed p: linear mixed model with a per-replicate random "
+               "intercept — both context, Holm-adjusted with three or more "
+               "levels" if project else
+               "Welch p: Welch's t-test, Holm-adjusted with three or more "
+               "levels — context")
             + ". No correction across phases, strata or metrics; full output "
             "in the _Stats.txt file." + tail)
         blocks.append(m.Table(columns=columns, rows=rows, row_levels=levels,

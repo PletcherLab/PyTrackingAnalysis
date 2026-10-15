@@ -84,14 +84,16 @@ def test_monte_carlo_is_reproducible_never_zero_and_near_exact():
 
 def test_labels_move_only_within_strata():
     # Replicate 1 holds only A, replicate 2 only B: a plate effect would look
-    # like a treatment effect to a pooled test, but no relabelling exists
-    # within the replicates, so the permutation p is 1.
+    # like a treatment effect to a pooled test, but with the replicate in the
+    # model the difference cannot be separated from it at all — not
+    # estimable, so no p (and no relabelling exists to shuffle anyway).
     x = np.r_[np.full(5, 0.1), np.full(5, 0.9)] + np.linspace(0, 0.01, 10)
     g = np.array([0] * 5 + [1] * 5)
     strata = np.array([0] * 5 + [1] * 5)
     assert P.count_relabellings(g, strata) == 1
     r = P.permutation_test(x, g, strata=strata)
-    assert r["p"][0] == 1.0
+    assert r["estimable"] == [False] and np.isnan(r["p"][0])
+    assert np.isnan(P.parametric_family(x, g, strata, [(0, 1)], [0])[0])
     assert stats.ttest_ind(x[:5], x[5:], equal_var=False).pvalue < 1e-6
     # Balanced within each stratum: the counts multiply.
     g2 = np.array([0, 0, 1, 1, 0, 1, 0, 1])
@@ -127,7 +129,7 @@ def test_sign_flip_matches_brute_force_and_states_its_floor():
     assert P.sign_flip_test([0.3, 0.3, 0.3]) is None   # no spread
 
 
-def test_welch_family_and_holm():
+def test_holm():
     from statsmodels.stats.multitest import multipletests
 
     raw = [0.01, 0.04, 0.03, float("nan")]
@@ -136,11 +138,49 @@ def test_welch_family_and_holm():
     assert adjusted[:3] == pytest.approx(list(expected))
     assert np.isnan(adjusted[3])
 
-    a, b = np.array([1.0, 1.2, 0.9, 1.1]), np.array([1.5, 1.7, 1.6, 1.4])
-    two = P.welch_family([a, b], [(0, 1)], [0])[0]
-    greater = P.welch_family([a, b], [(0, 1)], [1])[0]
-    assert two == pytest.approx(stats.ttest_ind(b, a, equal_var=False).pvalue)
-    assert greater == pytest.approx(two / 2)
+
+@pytest.mark.parametrize("side,alternative",
+                         [(0, "two-sided"), (1, "greater"), (-1, "less")])
+def test_one_replicate_is_welchs_t_test_exactly(side, alternative):
+    # The replicate-adjusted statistic with a single replicate: Welch's t,
+    # and its parametric p is Welch's p (Satterthwaite df), in any sidedness.
+    rng = np.random.default_rng(8)
+    a, b = rng.normal(0, 1, 9), rng.normal(0.8, 2.5, 14)
+    x, g = np.r_[a, b], np.r_[np.zeros(9, int), np.ones(14, int)]
+    welch = stats.ttest_ind(b, a, equal_var=False, alternative=alternative)
+    assert P.permutation_test(x, g, shuffles=500)["t"][0] == \
+        pytest.approx(welch.statistic)
+    assert P.parametric_family(x, g, None, [(0, 1)], [side])[0] == \
+        pytest.approx(welch.pvalue)
+
+
+def test_replicates_are_fixed_effects_with_robust_errors():
+    # Several replicates: each pair's t is its contrast in
+    # Value ~ replicate + group over the HC2 standard error (statsmodels).
+    import pandas as pd
+    import statsmodels.formula.api as smf
+
+    rng = np.random.default_rng(3)
+    d = pd.DataFrame({"y": rng.normal(size=72),
+                      "rep": np.repeat(["r1", "r2", "r3"], 24),
+                      "grp": np.tile(["A", "B", "C"], 24)})
+    d.loc[d.rep == "r2", "y"] += 3.0                    # a big plate effect
+    d.loc[d.grp == "C", "y"] += 0.7
+    codes = d.grp.map({"A": 0, "B": 1, "C": 2}).to_numpy()
+    pairs = [(0, 1), (0, 2), (1, 2)]
+    r = P.permutation_test(d.y.to_numpy(), codes, strata=d.rep.to_numpy(),
+                           pairs=pairs, shuffles=2_000)
+    fit = smf.ols("y ~ C(rep) + C(grp)", d).fit(cov_type="HC2")
+    assert r["t"][0] == pytest.approx(fit.tvalues["C(grp)[T.B]"])
+    assert r["t"][1] == pytest.approx(fit.tvalues["C(grp)[T.C]"])
+    contrast = fit.t_test("C(grp)[T.C] - C(grp)[T.B] = 0")
+    assert r["t"][2] == pytest.approx(np.asarray(contrast.tvalue).item())
+    # One-sided stays one-sided: the signed t, counted in one tail.
+    greater = P.permutation_test(d.y.to_numpy(), codes, strata=d.rep.to_numpy(),
+                                 pairs=[(0, 2)], sides=[1], shuffles=2_000)
+    less = P.permutation_test(d.y.to_numpy(), codes, strata=d.rep.to_numpy(),
+                              pairs=[(0, 2)], sides=[-1], shuffles=2_000)
+    assert greater["p"][0] < 0.05 < less["p"][0]
 
 
 def test_one_sided_from_two():

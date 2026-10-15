@@ -239,7 +239,7 @@ def test_project_report_model_and_pdf(tmp_path):
     assert "Statistical comparisons" in titles
     assert "Per-replicate summary" in titles
     stats = [t for t in tables if t.title == "Statistical comparisons"][0]
-    assert stats.columns[-3:] == ["Permutation p", "Welch p", "Mixed p"]
+    assert stats.columns[-3:] == ["Permutation p", "Model p", "Mixed p"]
     reps = [t for t in tables if t.title == "Per-replicate summary"][0]
     assert [r[0] for r in reps.rows] == ["Rep1", "Rep2"]
     figures = [b for b in model.blocks if isinstance(b, m.Figure)]
