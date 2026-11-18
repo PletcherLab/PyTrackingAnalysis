@@ -264,7 +264,8 @@ def _contains(folder, path) -> bool:
 def _recording_files(directory) -> list[str]:
     """Files in *directory* that would be part of a recording: ``.xlsx`` and
     ``.csv`` in any case, never a lock file, a hidden file or a Removal
-    Sheet."""
+    Sheet. Used for a replicate's own ``data/``, where anything shaped like
+    an export is a piece of one."""
     return [name for name in _entries(directory)
             if name.lower().endswith(RECORDING_SUFFIXES)
             and not name.startswith(_IGNORED_PREFIXES)
@@ -273,8 +274,14 @@ def _recording_files(directory) -> list[str]:
 
 
 def _own_recording(directory, target) -> str:
-    """A recording the replicate folder holds itself — in its own ``data/``
-    or at its root — as a path relative to it, or ``""``.
+    """A recording the replicate folder holds itself, as a path relative to
+    it, or ``""``.
+
+    In its own ``data/``, any export-shaped file counts
+    (:func:`_recording_files`). At its root, only what the ordinary
+    classifier counts as a loose recording — a loadable workbook
+    (:func:`_loadable_workbooks`) — so a ``units.csv`` or any other table
+    kept beside the config is not mistaken for a second recording.
 
     A folder that IS the target does not count: ``data_folder: data`` names
     the replicate's own ``data/``, and that is one recording, not two. An
@@ -283,13 +290,13 @@ def _own_recording(directory, target) -> str:
     places = []
     local = data_dir(directory)
     if os.path.isdir(local):
-        places.append((local, os.path.basename(local) + "/"))
-    places.append((str(directory), ""))
+        places.append((local, os.path.basename(local) + "/", _recording_files))
+    places.append((str(directory), "", _loadable_workbooks))
     target = os.path.normcase(os.path.realpath(target))
-    for folder, prefix in places:
+    for folder, prefix, recordings in places:
         if os.path.normcase(os.path.realpath(folder)) == target:
             continue
-        found = _recording_files(folder)
+        found = recordings(folder)
         if found:
             return prefix + found[0]
     return ""

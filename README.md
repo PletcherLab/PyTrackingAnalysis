@@ -87,7 +87,7 @@ the folder with a top-level `data_folder:` key in its `tracking_config.yaml`,
 relative to the replicate folder and with forward slashes:
 
 ```yaml
-data_folder: ../../../../../runs/dtrack/2026/R-20261020-asmith-01/data
+data_folder: ../../../../../runs/tracking/2026/R-20261020-asmith-01/data
 global:
   ...
 ```

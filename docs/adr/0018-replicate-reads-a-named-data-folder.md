@@ -31,7 +31,7 @@ code, so the rule is decided here first and ported from here.
   blank value is no key.
 
 - **Relative to the replicate folder, forward slashes.**
-  `../../../../../runs/dtrack/2026/R-20261020-asmith-01/data` is what labdata
+  `../../../../../runs/tracking/2026/R-20261020-asmith-01/data` is what labdata
   writes. Resolution is the operating system's own (`realpath` of the joined
   path, so `..` is taken after any symlink, as `open()` would take it).
   Windows accepts backslashes natively. An absolute value works, but the
@@ -74,8 +74,11 @@ code, so the rule is decided here first and ported from here.
   and the loader raises `DataLocationError`, naming the key, the value as
   written and the resolved path — when the folder does not exist or is a
   file (**no recording**); when the replicate folder also holds a recording
-  of its own, in `data/` or at its root (**ambiguous**: which is the
-  experiment?); or when the named folder holds the replicate folder itself
+  of its own (**ambiguous**: which is the experiment?) — any `.xlsx` or
+  `.csv` in its own `data/`, where an export-shaped file is a piece of one,
+  but at its root only a loadable workbook, which is all the ordinary
+  classifier counts there, so a `units.csv` beside the config is just a
+  file; or when the named folder holds the replicate folder itself
   (**ambiguous**: the analysis would be written inside the recording). An
   empty local `data/` is not a conflict. A referencing replicate is never an
   **Unfiled Recording**: a workbook in the named folder is where the loader
@@ -146,6 +149,10 @@ Rejected:
 - With an alternate config (`Experiment(..., config_path=...)`) the loader
   reads the key from that file; the classifier always reads
   `tracking_config.yaml`. The Hub only ever loads the canonical file.
+- On Windows, `realpath` of a path longer than 260 characters may come back
+  with a `\\?\` prefix, and that is the resolved path the messages, the
+  report and the run manifest then show. It still reads correctly. Untested:
+  the suite runs on Linux only.
 - `layout.DUPLICATE` is a new Blocked Experiment status with no fix button —
   the fix is deciding which replicate should read that recording.
 - pyflic and pySurvAnalysis port this rule from `layout.py` and `project.py`;

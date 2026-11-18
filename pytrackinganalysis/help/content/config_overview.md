@@ -15,7 +15,7 @@ Project-level scripts live in `project.yaml`, not in a replicate's `tracking_con
 ## Reading a recording stored elsewhere: `data_folder`
 
 ```
-data_folder: ../../../../../runs/dtrack/2026/R-20261020-asmith-01/data
+data_folder: ../../../../../runs/tracking/2026/R-20261020-asmith-01/data
 global:
   ...
 ```

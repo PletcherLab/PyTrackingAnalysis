@@ -823,7 +823,7 @@ top-level `data_folder:` names another folder that holds those files instead
 settings, so nothing has to be copied:
 
 ```yaml
-data_folder: ../../../../../runs/dtrack/2026/R-20261020-asmith-01/data
+data_folder: ../../../../../runs/tracking/2026/R-20261020-asmith-01/data
 global:
   tracking_type: TWOCHOICETRACKER
   ...
@@ -831,7 +831,7 @@ global:
 
 ```
 managed/
-├── runs/dtrack/2026/R-20261020-asmith-01/
+├── runs/tracking/2026/R-20261020-asmith-01/
 │   └── data/                                ← the recording (read only)
 └── studies/mbon10/analyses/A-20261105-asmith-01/
     ├── project.yaml                         ← the Project

@@ -30,7 +30,7 @@ Some Experiment Types constrain the allowed rigs. Valence accepts Arena Max (36 
 
 Leave **Data folder** empty and the experiment reads its recording from its own `data/`, as always. Fill it in to read the recording from another folder instead — for example a locked run folder several studies share. It is saved as `data_folder:` at the top of the file, beside `global:` rather than inside it.
 
-Write the path relative to this experiment's folder, with forward slashes (`../../../../../runs/dtrack/2026/R-20261020-asmith-01/data`). An absolute path works, but saving and **Validate YAMLs** note that it is not portable. The folder is only read: `analysis/`, `qc/` and the report are still written here. **From data** on the Tracking regions tab reads the plate from that folder. See **Config file overview** for the full rules.
+Write the path relative to this experiment's folder, with forward slashes (`../../../../../runs/tracking/2026/R-20261020-asmith-01/data`). An absolute path works, but saving and **Validate YAMLs** note that it is not portable. The folder is only read: `analysis/`, `qc/` and the report are still written here. **From data** on the Tracking regions tab reads the plate from that folder. See **Config file overview** for the full rules.
 
 ## Experimental design factors
 

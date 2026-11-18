@@ -29,6 +29,8 @@ combined publication figures, and no report above the single recording.
   pooled CSVs under the original Project's name. A name typed differently in
   Create/Edit Project is still stored — a copied *custom* name still travels,
   which is the one case the marker cannot disambiguate.
+
+  **Amendment (2026-11):** recordings may live outside the Project (ADR-0018).
 - **Hard design-match validation.** At Project load, every replicate must
   agree on `experiment_type` and on experimental-design factor names AND
   levels; a mismatch is a load error naming the offender (the ADR-0001

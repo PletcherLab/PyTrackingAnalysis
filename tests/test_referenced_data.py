@@ -479,6 +479,27 @@ def test_t1_a_loose_workbook_beside_the_key_is_a_conflict_not_unfiled(tmp_path):
     assert "Loose.xlsx" in item.detail and "Loose.xlsx" in error
 
 
+def test_a_csv_at_the_root_of_a_referencing_member_is_not_a_recording(tmp_path):
+    """At the root only what the ordinary classifier counts as a recording —
+    a loadable workbook — competes with the key. A units table beside the
+    config is just a file."""
+    member = referencing_member(tmp_path)
+    (member / "units.csv").write_text("unit,genotype\nT_1,CS\n", encoding="utf-8")
+    item, loaded, error = outcome(member)
+    assert item.status == layout.OK and loaded, error
+
+
+def test_a_csv_in_the_local_data_folder_still_conflicts(tmp_path):
+    """In data/ anything that looks like part of an export counts: a stray
+    ``_Data_1.csv`` there is a piece of a second recording."""
+    member = referencing_member(tmp_path)
+    (member / "data").mkdir()
+    (member / "data" / "Other_Data_1.csv").write_bytes(b"x")
+    item, loaded, error = outcome(member)
+    assert item.status == layout.AMBIGUOUS and not loaded
+    assert "Other_Data_1.csv" in item.detail and "Other_Data_1.csv" in error
+
+
 def test_the_key_may_not_name_the_member_folder_itself(tmp_path):
     """Everything the package writes goes into the member folder, so a data
     location that holds it would be written into."""

@@ -60,7 +60,7 @@ The folder an Experiment Directory reads its recording from when its
 place of its own `data/` — so a study's Project can analyse a recording that
 lives, locked, somewhere else (a labdata run) without copying it. Written
 relative to the Experiment Directory, with forward slashes
-(`../../../../../runs/dtrack/2026/R-20261020-asmith-01/data`); an absolute
+(`../../../../../runs/tracking/2026/R-20261020-asmith-01/data`); an absolute
 path works but is warned about as not portable. The folder is only ever
 **read**: `analysis/`, `qc/`, the report, the run manifest and every sidecar
 are still written in the Experiment Directory, and nothing ever files,

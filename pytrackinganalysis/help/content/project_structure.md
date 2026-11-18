@@ -36,7 +36,7 @@ An Experiment Directory can leave out `data/` and name the folder that holds its
 studies/my-study/analyses/A-20261105-asmith-01/      <- the Project
 ├── project.yaml
 └── R-20261020-asmith-01/                            <- a replicate
-    ├── tracking_config.yaml   <- data_folder: ../../../../../runs/dtrack/2026/R-20261020-asmith-01/data
+    ├── tracking_config.yaml   <- data_folder: ../../../../../runs/tracking/2026/R-20261020-asmith-01/data
     ├── analysis/  qc/         <- written here, as always
     └── R-20261020-asmith-01_report.pdf
 ```
