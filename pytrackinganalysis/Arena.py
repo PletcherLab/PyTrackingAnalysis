@@ -80,6 +80,10 @@ class Arena:
         self.parameters = parameters
         self.experiment_name = exp_name
         self.data_path = data_path
+        #: When set, the opt-in ``write_to_csvfile`` exports refuse with this
+        #: message instead of writing beside the recording: Experiment sets it
+        #: for a recording read through ``data_folder:`` (ADR-0018).
+        self.write_refusal = ""
 
         if config_path is None:
             parent = os.path.dirname(os.path.normpath(data_path))
@@ -432,7 +436,10 @@ class Arena:
         One place decides this. Every call site used to build the path with
         ``self.data_path + self.experiment_name``, which assumes a trailing
         separator that neighbouring lines using ``os.path.join`` do not.
+        Refuses (:attr:`write_refusal`) for a recording that is only read.
         """
+        if self.write_refusal:
+            raise PermissionError(self.write_refusal)
         return os.path.join(self.data_path, f"{self.experiment_name}{suffix}")
 
     def _over_facets(self, fn, cutoffs, **kwargs):

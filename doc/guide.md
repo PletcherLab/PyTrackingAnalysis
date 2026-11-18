@@ -235,7 +235,9 @@ uv sync          # installs / removes packages to match the updated lock file
 
 An **experiment directory** is the root folder for a single recording. It must
 contain `tracking_config.yaml` and a `data/` sub-folder with the DTrack export
-files.  The pipeline creates `analysis/` and `qc/` automatically on first run.
+files — or a `data_folder:` key in its config naming a folder stored elsewhere
+that holds them (§4.7).  The pipeline creates `analysis/` and `qc/`
+automatically on first run.
 (Several experiment directories become replicates of a **Project** — see the
 Projects section below.)
 
@@ -341,6 +343,8 @@ serves every replicate without being copied into their configs.
 `tracking_regions`, `counting_regions`, and `scripts`.  `global` and
 `tracking_regions` are required for every experiment; `counting_regions` is
 required for the two-choice and counter tracking types; `scripts` is optional.
+One optional top-level key, `data_folder`, reads the recording from a folder
+stored elsewhere instead of `data/` (§4.7).
 
 ### Creating a valid file
 
@@ -567,6 +571,19 @@ their generic defaults, so double-check the spelling.
 > The repair shifts those three columns from each rollback onwards (snapped to
 > whole hours when that is what was lost), leaves every other column as it
 > was, and keeps the untouched files in `data_original/` beside `data/`.
+>
+> To leave the originals untouched, write a repaired copy elsewhere instead.
+> This is the only way to repair an experiment that reads its recording
+> through `data_folder:` (§4.7), which is never rewritten in place:
+>
+> ```bash
+> uv run python -m pytrackinganalysis.clock_repair /path/to/MyExperiment --out /path/to/derived/clock_repaired
+> ```
+>
+> `--out` names a new (or empty) folder. It receives a complete copy of the
+> data folder — the export CSVs repaired, every other file copied byte for
+> byte — and a `README.txt` describing the repair. Then point the
+> experiment's `data_folder:` at it.
 
 ---
 
@@ -798,7 +815,65 @@ validation rules, and hand-editing guidance.
 
 ---
 
-### 4.7 Complete minimal example
+### 4.7 `data_folder` — reading a recording stored elsewhere (optional)
+
+By default an experiment reads its DTrack export from its own `data/`. A
+top-level `data_folder:` names another folder that holds those files instead
+— typically a locked run folder that several studies analyse with their own
+settings, so nothing has to be copied:
+
+```yaml
+data_folder: ../../../../../runs/dtrack/2026/R-20261020-asmith-01/data
+global:
+  tracking_type: TWOCHOICETRACKER
+  ...
+```
+
+```
+managed/
+├── runs/dtrack/2026/R-20261020-asmith-01/
+│   └── data/                                ← the recording (read only)
+└── studies/mbon10/analyses/A-20261105-asmith-01/
+    ├── project.yaml                         ← the Project
+    └── R-20261020-asmith-01/                ← a replicate
+        ├── tracking_config.yaml             ← data_folder: ../../../../../runs/…/data
+        ├── analysis/  qc/                   ← written here, as always
+        └── R-20261020-asmith-01_report.pdf
+```
+
+- **Relative to the experiment folder, with forward slashes.** An absolute
+  path works, but **Validate YAMLs**, the Config Editor's save and the loader
+  note that it is not portable — it breaks when the share is mounted
+  somewhere else. On Windows, backslashes are accepted too.
+- **Only ever read.** `analysis/`, `qc/`, the report,
+  `analysis/.pytracking_run.json` and `removed_regions.yaml` are written in the
+  experiment folder, exactly as without the key. Nothing files, moves or
+  repairs anything in the named folder, and Arena's `write_to_csvfile=True`
+  exports refuse for such an experiment (they write beside the recording).
+- **This config's alone.** Never under `global:`, never in the Project's
+  `design:`; a replicate scaffolded from it, or a config copied from it with
+  **Copy config from…**, does not get the key.
+- **Conflicts block, they are not guessed.** The experiment is blocked —
+  and loading it raises an error naming `data_folder`, the value as written
+  and the path it resolved to — when the folder is missing, is a file, or
+  holds the experiment folder itself, or when the experiment's own `data/`
+  (or its root) also holds a recording. An empty `data/` is fine. Such an
+  experiment is never an Unfiled Recording and is never filed.
+- **One recording, one replicate.** If two replicates of one Project read
+  the same folder, the first in name order is analyzed and the other is
+  reported as a **duplicate** (a Project note, and a blocked experiment in
+  the batch review). Two *Projects* reading the same folder is fine.
+- **Where the data came from** is recorded: the run manifest
+  (`analysis/.pytracking_run.json`) gets `data_location` with the value as
+  written and the resolved path, and the experiment summary and report cover
+  give both.
+
+Leave the key out (or empty) and nothing changes. The Config Editor shows it
+as **Data folder** on the Global tab. See `docs/adr/0018`.
+
+---
+
+### 4.8 Complete minimal example
 
 ```yaml
 global:
@@ -2107,6 +2182,7 @@ uv sync                   # install / update all dependencies
 uv add <package>          # add a new dependency
 uv run python <script>    # run without activating the environment
 uv run python -m pytrackinganalysis.clock_repair <experiment>  # fix a clock set back mid-recording
+uv run python -m pytrackinganalysis.clock_repair <experiment> --out <new folder>  # ...as a repaired copy, originals untouched
 source .venv/bin/activate # activate on macOS / Linux
 .venv\Scripts\Activate.ps1  # activate on Windows PowerShell
 ```

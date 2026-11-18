@@ -36,7 +36,7 @@ keep working unchanged.
 ## Blocked experiments, and fixing them
 
 An experiment directory the run cannot use is **blocked**, and its Project's
-row turns red with the count. There are four reasons:
+row turns red with the count. There are five reasons:
 
 - **Unfiled recording** — the DTrack export is still sitting at the
   experiment's root instead of in `data/`, where the loader looks. This is the
@@ -53,6 +53,14 @@ row turns red with the count. There are four reasons:
 - **Ambiguous** — two workbooks, so "which one is the experiment?" cannot be
   answered for you. Sort it out in a file manager; filing refuses to guess,
   because the loader would quietly pick one and analyze it.
+- **Duplicate** — the experiment's `data_folder:` names a recording another
+  replicate of the same Project already reads. Only the first, in name order,
+  is analyzed; point the other at its own recording or remove it.
+
+An experiment whose config names its recording with `data_folder:` is never
+filed. When that folder is missing, or the experiment also holds a recording
+of its own, it is blocked as **no recording** or **ambiguous**, and the reason
+names the path the key resolved to.
 
 Blocked belongs to the *experiment*, never to the Project: a Project with four
 healthy replicates and one blocked one runs the four. A Project with nothing

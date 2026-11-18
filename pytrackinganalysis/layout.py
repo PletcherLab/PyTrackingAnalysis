@@ -25,6 +25,13 @@ the experiment?") refuses to file at all. ``Experiment`` picks the first of
 several ``data/*.xlsx`` with only a log line, so a one-click fix that can
 silently change which recording an analysis is of is worse than a directory
 that stays blocked.
+
+**Where the recording is** is answered once, by :func:`data_location`
+(ADR-0018): the replicate's own ``data/``, or the folder its
+``data_folder:`` key names. The loader, this classifier, the Project, Batch
+discovery, the Hub and clock repair all ask it, so none of them can read a
+different folder from the others. A referenced recording is only ever read:
+it is never filed, moved, repaired in place, or written beside.
 """
 
 from __future__ import annotations
@@ -34,11 +41,19 @@ import os
 import shutil
 from dataclasses import dataclass, field
 
+import yaml
+
 from .project import CONFIG_FILENAME
 
 #: Where a recording belongs, and where everything else loose is parked.
 DATA_DIRNAME = "data"
 EXTRA_DIRNAME = "extra_files"
+
+#: The top-level ``tracking_config.yaml`` key naming the folder a replicate
+#: reads its recording from instead of its own ``data/`` (ADR-0018). It
+#: belongs to that one config: never under ``global:``, never in a Project
+#: design, never inherited by a scaffolded replicate.
+DATA_FOLDER_KEY = "data_folder"
 
 #: The recording itself: ``<name>.xlsx`` plus its ``<name>_Data_*.csv``
 #: companions — exactly what ``Arena`` loads out of ``data/``.
@@ -67,6 +82,8 @@ NO_CONFIG = "no config"
 NO_RECORDING = "no recording"
 AMBIGUOUS = "ambiguous"
 UNREADABLE = "unreadable"
+#: A second replicate reading a recording an earlier one already reads.
+DUPLICATE = "duplicate"
 
 #: Which action clears each status. ``None`` means no button can fix it.
 _FIX = {UNFILED: "file", NO_CONFIG: "config"}
@@ -120,13 +137,14 @@ def _readable(directory) -> bool:
 
 
 def data_dir(directory) -> str:
-    """The directory's ``data/`` folder, matched the way the loader matches it.
+    """The directory's own ``data/`` folder, matched case-insensitively.
 
-    ``Experiment._find_subdir`` takes the first case-insensitive match in
-    ``os.listdir`` order; matching exactly here would call a ``Data/``
-    replicate unfiled and then file a *second* ``data/`` beside it. Where both
-    spellings exist the loader's own order wins, so the classifier and the
-    loader cannot end up reading different directories.
+    The first case-insensitive match in ``os.listdir`` order; matching exactly
+    would call a ``Data/`` replicate unfiled and then file a *second*
+    ``data/`` beside it. This is the folder a replicate reads when its config
+    names no ``data_folder:`` — ask :func:`data_location` "where is the
+    recording?", which the loader does too, so the classifier and the loader
+    cannot end up reading different directories.
     """
     try:
         entries = os.listdir(directory)
@@ -137,6 +155,206 @@ def data_dir(directory) -> str:
                 os.path.join(str(directory), entry)):
             return os.path.join(str(directory), entry)
     return os.path.join(str(directory), DATA_DIRNAME)
+
+
+# ---------------------------------------------------------------------------
+# Where a replicate's recording is (ADR-0018)
+# ---------------------------------------------------------------------------
+
+
+class DataLocationError(ValueError):
+    """A replicate's ``data_folder:`` cannot be read as it stands — the folder
+    is missing, is a file, or competes with a recording of the replicate's
+    own. The message names the key, the value as written and the resolved
+    path."""
+
+
+#: Why a referenced location cannot be used; the classifier maps each to a
+#: Blocked Experiment status.
+_MISSING = "missing"
+_NOT_A_FOLDER = "not a folder"
+_NOT_A_PATH = "not a path"
+_CONFLICT = "conflict"
+_HOLDS_REPLICATE = "holds the replicate"
+
+
+@dataclass(frozen=True)
+class DataLocation:
+    """Where one replicate's recording is read from.
+
+    *path* is the folder the loader reads. *written* is the ``data_folder:``
+    value exactly as the config spells it, or None when the replicate reads
+    its own ``data/`` — in which case *path* is :func:`data_dir`'s answer and
+    nothing else about the replicate has changed. *problem* says why the
+    loader cannot read a referenced location; it is empty when it can.
+    """
+
+    path: str
+    written: str | None = None
+    problem: str = ""
+    kind: str = ""
+
+    @property
+    def referenced(self) -> bool:
+        """The replicate names its data location in its config."""
+        return self.written is not None
+
+    @property
+    def identity(self) -> str:
+        """What two locations are compared by: one recording, one member.
+        ``normcase`` because the lab's share is case-insensitive."""
+        return os.path.normcase(os.path.realpath(self.path))
+
+
+def configured_data_folder(directory, config=None, config_path=None):
+    """The ``data_folder:`` value for *directory*, as written, or None.
+
+    *config* is a config already parsed; otherwise the file at *config_path*
+    (default ``<directory>/tracking_config.yaml``) is read. A config that never
+    mentions the key is not parsed at all, so a replicate without one costs a
+    file read and nothing it did before can change. A config that cannot be
+    read or parsed counts as having no key: the loader reports a broken config
+    itself, and the classifier keeps the answer it always gave. A blank value
+    is no key.
+    """
+    if config is None:
+        path = config_path or os.path.join(str(directory), CONFIG_FILENAME)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        except OSError:
+            return None
+        if DATA_FOLDER_KEY not in text:
+            return None
+        try:
+            config = yaml.safe_load(text)
+        except yaml.YAMLError:
+            return None
+    if not isinstance(config, dict):
+        return None
+    value = config.get(DATA_FOLDER_KEY)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    return value
+
+
+def resolve_data_folder(directory, value) -> str:
+    """*value* resolved against the replicate folder *directory*.
+
+    An absolute value is kept as it is. Resolution is the operating system's
+    own — ``realpath``, so ``..`` is taken after any symlink, exactly as an
+    ``open()`` of the joined path would take it. Windows accepts backslashes
+    as separators natively; elsewhere a backslash is part of a name, which is
+    why the config linter asks for forward slashes.
+    """
+    return os.path.realpath(os.path.join(os.path.abspath(str(directory)),
+                                         str(value)))
+
+
+def _contains(folder, path) -> bool:
+    """*path* is *folder* or somewhere beneath it."""
+    folder = os.path.normcase(os.path.realpath(folder))
+    path = os.path.normcase(os.path.realpath(path))
+    try:
+        return os.path.commonpath([folder, path]) == folder
+    except ValueError:                      # different drives
+        return False
+
+
+def _recording_files(directory) -> list[str]:
+    """Files in *directory* that would be part of a recording: ``.xlsx`` and
+    ``.csv`` in any case, never a lock file, a hidden file or a Removal
+    Sheet."""
+    return [name for name in _entries(directory)
+            if name.lower().endswith(RECORDING_SUFFIXES)
+            and not name.startswith(_IGNORED_PREFIXES)
+            and not _is_sidecar(name)
+            and os.path.isfile(os.path.join(str(directory), name))]
+
+
+def _own_recording(directory, target) -> str:
+    """A recording the replicate folder holds itself — in its own ``data/``
+    or at its root — as a path relative to it, or ``""``.
+
+    A folder that IS the target does not count: ``data_folder: data`` names
+    the replicate's own ``data/``, and that is one recording, not two. An
+    empty ``data/`` holds nothing, so it is not a conflict either.
+    """
+    places = []
+    local = data_dir(directory)
+    if os.path.isdir(local):
+        places.append((local, os.path.basename(local) + "/"))
+    places.append((str(directory), ""))
+    target = os.path.normcase(os.path.realpath(target))
+    for folder, prefix in places:
+        if os.path.normcase(os.path.realpath(folder)) == target:
+            continue
+        found = _recording_files(folder)
+        if found:
+            return prefix + found[0]
+    return ""
+
+
+def data_location(directory, *, config=None, config_path=None) -> DataLocation:
+    """Where the replicate in *directory* reads its recording from.
+
+    Without ``data_folder:`` this is :func:`data_dir` — today's
+    case-insensitive ``data/`` — and nothing more is checked. With it, the
+    value is resolved against *directory* and checked, in this order, for
+    the problems that make the loader refuse it: a value that is not a path;
+    a location holding the replicate folder itself (everything the package
+    writes for the replicate goes there, and nothing is ever written at a
+    data location); a recording of the replicate's own beside the key
+    ("which is the experiment?"); a location that does not exist; and a file
+    where a folder belongs. Each problem names the key, the value as written
+    and the resolved path.
+
+    *config* (already parsed) or *config_path* (another config file) are for
+    a caller that has one; the default reads ``tracking_config.yaml``.
+    """
+    directory = str(directory)
+    value = configured_data_folder(directory, config, config_path)
+    if value is None:
+        return DataLocation(data_dir(directory))
+
+    written = value if isinstance(value, str) else repr(value)
+    path = resolve_data_folder(directory, written)
+    where = f"{DATA_FOLDER_KEY}: {written} resolves to {path}"
+
+    def refused(kind, problem):
+        return DataLocation(path, written, problem, kind)
+
+    if not isinstance(value, str):
+        return refused(_NOT_A_PATH,
+                       f"{DATA_FOLDER_KEY}: {written} is not a folder path")
+    if _contains(path, directory):
+        return refused(
+            _HOLDS_REPLICATE,
+            f"{where}, which holds the replicate folder "
+            f"{os.path.realpath(directory)} itself — the analysis is written "
+            "there, and nothing is ever written at a data location")
+    own = _own_recording(directory, path)
+    if own:
+        return refused(
+            _CONFLICT,
+            f"{where}, but {directory} also holds a recording of its own "
+            f"({own}) — which is the experiment? Remove {DATA_FOLDER_KEY}: "
+            "or move the local recording out")
+    if not os.path.exists(path):
+        return refused(_MISSING, f"{where}, which does not exist")
+    if not os.path.isdir(path):
+        return refused(_NOT_A_FOLDER, f"{where}, which is a file, not a folder")
+    return DataLocation(path, written)
+
+
+def require_data_location(directory, *, config_path=None) -> DataLocation:
+    """:func:`data_location`, raising :class:`DataLocationError` for a
+    referenced location the loader cannot read. The loader's entry point."""
+    location = data_location(directory, config_path=config_path)
+    if location.problem:
+        source = config_path or os.path.join(str(directory), CONFIG_FILENAME)
+        raise DataLocationError(f"{location.problem} (set in {source})")
+    return location
 
 
 def _loadable_workbooks(directory) -> list[str]:
@@ -214,22 +432,36 @@ def _is_sidecar(name: str) -> bool:
 def classify(directory) -> ExperimentLayout:
     """What *directory* is: healthy replicate, Blocked Experiment, or neither.
 
-    Layout only — no YAML is parsed and no data is read, so this stays cheap
+    Layout only — no data is read, and the config is parsed only when it
+    mentions ``data_folder:`` (:func:`data_location`), so this stays cheap
     enough to run over every subdirectory of every Project in a Batch.
     """
     directory = str(directory)
-    name = os.path.basename(os.path.normpath(directory))
     if not os.path.isdir(directory):
-        return ExperimentLayout(directory, name, NOT_AN_EXPERIMENT)
+        return ExperimentLayout(directory, _name(directory), NOT_AN_EXPERIMENT)
+    return _classify(directory, data_location(directory))
+
+
+def _name(directory) -> str:
+    return os.path.basename(os.path.normpath(str(directory)))
+
+
+def _classify(directory, location: DataLocation) -> ExperimentLayout:
+    """:func:`classify` for a directory whose data location is already known
+    — the same answer, so :func:`experiments_in` can compare locations
+    without resolving each one twice."""
+    name = _name(directory)
     if not _readable(directory):
         ## Unknown is not the same as absent: a directory nobody can list may
         ## hold a replicate, and silently dropping it would overstate the
         ## Member's coverage in both the preflight and the run summary.
         return ExperimentLayout(directory, name, UNREADABLE,
                                 "cannot be listed (permissions?)")
+    if location.referenced:
+        return _classify_referenced(directory, name, location)
 
     configured = has_config(directory)
-    data = data_dir(directory)
+    data = location.path
     filed = _loadable_workbooks(data)
     loose_books = _loadable_workbooks(directory)
 
@@ -283,6 +515,49 @@ def classify(directory) -> ExperimentLayout:
     return ExperimentLayout(directory, name, NOT_AN_EXPERIMENT)
 
 
+def _classify_referenced(directory, name, location: DataLocation) -> ExperimentLayout:
+    """A replicate whose config names its data folder (ADR-0018).
+
+    Decided by the loader's rule, applied to the folder the loader will read:
+    healthy when that folder holds exactly one loadable workbook, blocked
+    otherwise with the resolved path in the reason. Never an Unfiled
+    Recording — a workbook in a referenced folder is where the loader looks,
+    and a workbook at the replicate root beside the key is a conflict, not
+    something to file.
+    """
+    def blocked(status, detail):
+        return ExperimentLayout(directory, name, status, detail, (), True)
+
+    if location.problem:
+        status = (AMBIGUOUS if location.kind in (_CONFLICT, _HOLDS_REPLICATE)
+                  else NO_RECORDING)
+        return blocked(status, location.problem)
+
+    where = f"{DATA_FOLDER_KEY}: {location.written} ({location.path})"
+    filed = _loadable_workbooks(location.path)
+    if len(filed) > 1:
+        return blocked(AMBIGUOUS,
+                       f"{len(filed)} workbooks in {where} "
+                       f"({', '.join(filed[:3])}) — which is the experiment?")
+    if filed:
+        return ExperimentLayout(directory, name, OK, configured=True)
+
+    lookalikes = _workbook_lookalikes(location.path)
+    if lookalikes:
+        return blocked(NO_RECORDING,
+                       f"{lookalikes[0]} in {where} is not loadable — the "
+                       "loader looks for a lower-case .xlsx extension")
+    detail = f"no .xlsx in {where}"
+    nested = data_dir(location.path)
+    inside = _loadable_workbooks(nested) if os.path.isdir(nested) else []
+    if inside:
+        ## The usual slip: the key names the run folder, one level above the
+        ## data/ that holds the export.
+        detail += (f"; its {os.path.basename(nested)}/ holds {inside[0]} — "
+                   f"point {DATA_FOLDER_KEY}: at that folder")
+    return blocked(NO_RECORDING, detail)
+
+
 def experiments_in(project_dir) -> list[ExperimentLayout]:
     """Classify every immediate subdirectory of *project_dir* that could be a
     replicate, in name order.
@@ -300,6 +575,9 @@ def experiments_in(project_dir) -> list[ExperimentLayout]:
     #: counted (and analyzed, and pooled) twice — the same rule the Batch walk
     #: enforces one level up, and the one Project.__init__ now applies.
     seen: set[str] = set()
+    #: Data locations already read, for the same rule one step further: two
+    #: replicates naming one recording are one replicate (ADR-0018).
+    reads = DataLocations()
     for name in _entries(project_dir):
         if name.startswith("."):
             continue
@@ -317,10 +595,48 @@ def experiments_in(project_dir) -> list[ExperimentLayout]:
         if real in seen:
             continue
         seen.add(real)
-        item = classify(path)
+        location = data_location(path)
+        if has_config(path):
+            first = reads.claim(name, location)
+            if first is not None:
+                found.append(ExperimentLayout(
+                    path, name, DUPLICATE, duplicate_detail(first, location),
+                    configured=True))
+                continue
+        item = _classify(path, location)
         if item.status != NOT_AN_EXPERIMENT:
             found.append(item)
     return found
+
+
+class DataLocations:
+    """The data locations a Project's replicates read, first come first served.
+
+    One recording is analyzed once per Project (ADR-0011, extended by
+    ADR-0018): a replicate whose data location an earlier one — in sorted
+    order — already reads is a duplicate. Locations compare by
+    ``normcase(realpath(...))``. The rule applies only when one of the two
+    names its location with ``data_folder:``; two plain replicates whose
+    ``data/`` folders happen to be one folder are left as they always were.
+    """
+
+    def __init__(self) -> None:
+        self._taken: dict[str, tuple[str, DataLocation]] = {}
+
+    def claim(self, name: str, location: DataLocation) -> str | None:
+        """Record *name* reading *location*; return the earlier replicate it
+        duplicates, or None when it is the first to read it."""
+        first = self._taken.get(location.identity)
+        if first is not None and (location.referenced or first[1].referenced):
+            return first[0]
+        self._taken.setdefault(location.identity, (name, location))
+        return None
+
+
+def duplicate_detail(first: str, location: DataLocation) -> str:
+    """Why a replicate is a duplicate, naming the one that is kept."""
+    return (f"reads the same recording as {first} ({location.path}) — only "
+            f"{first} is analyzed")
 
 
 def initializable_dirs(project_dir) -> list[ExperimentLayout]:
@@ -414,6 +730,15 @@ def plan_filing(directory) -> FilingPlan:
     """
     directory = str(directory)
     plan = FilingPlan(directory)
+    location = data_location(directory)
+    if location.referenced:
+        ## Its recording lives where data_folder: says, and is only ever read
+        ## (ADR-0018). Whatever is loose here is a conflict to settle by hand,
+        ## not a recording to move.
+        plan.refused = (f"its {CONFIG_FILENAME} reads the recording from "
+                        f"{DATA_FOLDER_KEY}: {location.written} — a replicate "
+                        "that names its data folder is never filed")
+        return plan
     item = classify(directory)
     if item.status != UNFILED:
         plan.refused = ("already filed" if item.status == OK else

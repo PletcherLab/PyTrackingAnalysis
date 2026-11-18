@@ -28,6 +28,21 @@ MyExperiment/
 - Per-tracker CSVs must match `<name>_Data_<N>.csv`. `_Data_1.csv` maps to YAML region `T_0`, `_Data_2.csv` maps to `T_1`, and so on.
 - `tracking_config.yaml` must sit next to `data/`, not inside it.
 
+### Recording stored elsewhere
+
+An Experiment Directory can leave out `data/` and name the folder that holds its recording with `data_folder:` at the top of `tracking_config.yaml` — for example a locked run folder that several studies share:
+
+```
+studies/my-study/analyses/A-20261105-asmith-01/      <- the Project
+├── project.yaml
+└── R-20261020-asmith-01/                            <- a replicate
+    ├── tracking_config.yaml   <- data_folder: ../../../../../runs/dtrack/2026/R-20261020-asmith-01/data
+    ├── analysis/  qc/         <- written here, as always
+    └── R-20261020-asmith-01_report.pdf
+```
+
+The named folder is only read; every output stays in the replicate folder. See **Config file overview** for the rules.
+
 ## Project
 
 A directory with `project.yaml` is a **Project**. Its immediate subdirectories that contain `tracking_config.yaml` are replicates. The Project's `design:` section is the authority for the shared design, and each replicate is hard-validated against it when the Project loads.

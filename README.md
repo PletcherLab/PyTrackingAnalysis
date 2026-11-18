@@ -81,6 +81,21 @@ such directory per replicate. In the Hub: pick the Project folder, then
 **double-click a replicate row** to load it — output streams to the dock, and
 every plot opens as a tab.
 
+A replicate can also read its export from a folder stored elsewhere — say, a
+locked run folder that several studies share — instead of copying it in. Name
+the folder with a top-level `data_folder:` key in its `tracking_config.yaml`,
+relative to the replicate folder and with forward slashes:
+
+```yaml
+data_folder: ../../../../../runs/dtrack/2026/R-20261020-asmith-01/data
+global:
+  ...
+```
+
+That folder is only ever read; `analysis/`, `qc/` and the report are still
+written in the replicate folder. Leave the key out and nothing changes. See the
+[user guide](doc/guide.md) §4.7 and `docs/adr/0018`.
+
 ### Python
 
 ```python

@@ -121,6 +121,20 @@ def _parse_labels(text: str) -> list[str]:
     return [part.strip() for part in text.split(",") if part.strip()]
 
 
+#: What the Data folder field is for (ADR-0018).
+DATA_FOLDER_TOOLTIP = (
+    "data_folder: — read this experiment's recording from another folder "
+    "instead of its own data/.\n"
+    "Leave it empty to use data/ as always.\n\n"
+    "Write a path relative to this experiment's folder, with forward slashes, "
+    "e.g. ../../runs/R-20261020-asmith-01/data. An absolute path works but is "
+    "not portable.\n"
+    "The folder is only ever read: analysis/, qc/ and the report are still "
+    "written here.\n"
+    "This experiment's own data/ must then be empty or absent, and no other "
+    "experiment in the Project may read the same folder.")
+
+
 def _section_label(text: str) -> QLabel:
     lbl = QLabel(text)
     font = QFont()
@@ -233,6 +247,18 @@ class GlobalTab(QWidget):
         type_rig_row.addWidget(QLabel("Tracking rig:"))
         type_rig_row.addWidget(self.tracking_rig, 1)
         outer.addLayout(type_rig_row)
+
+        # Where the recording is read from (ADR-0018). A top-level key, not a
+        # global: one — the window writes it beside global:, never inside it.
+        self.data_folder = QLineEdit()
+        self.data_folder.setPlaceholderText("data/ (this experiment's own folder)")
+        self.data_folder.setToolTip(DATA_FOLDER_TOOLTIP)
+        data_row = QHBoxLayout()
+        data_caption = QLabel("Data folder:")
+        data_caption.setToolTip(DATA_FOLDER_TOOLTIP)
+        data_row.addWidget(data_caption)
+        data_row.addWidget(self.data_folder, 1)
+        outer.addLayout(data_row)
 
         outer.addSpacing(12)
         outer.addWidget(_section_label("Experimental design factors"))
@@ -751,6 +777,8 @@ class GlobalTab(QWidget):
 
     def load(self, config: dict) -> None:
         g = config.get("global", {})
+        value = config.get("data_folder")
+        self.data_folder.setText("" if value is None else str(value))
 
         # Experiment type first — setting it applies the field constraints, so
         # the owned fields below are already fixed/disabled for a typed config.
@@ -885,6 +913,10 @@ class GlobalTab(QWidget):
         "interaction_distances",
         *(key for key, _rule, _counter_too in _PAIRWISE_SETTINGS),
     )
+
+    def data_folder_value(self) -> str:
+        """The top-level ``data_folder:`` to write, or ``""`` for none."""
+        return self.data_folder.text().strip()
 
     def owned_keys(self) -> tuple[str, ...]:
         """The ``global:`` keys this tab is responsible for."""

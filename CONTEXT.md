@@ -49,9 +49,29 @@ carries a stale name into output filenames.
 _Avoid_: batch parent, parent directory
 
 **Experiment Directory**:
-One recording's directory — `tracking_config.yaml`, `data/`, `analysis/`,
-`qc/`, its own report — either standalone or as a replicate inside a Project.
+One recording's directory — `tracking_config.yaml`, `data/` (or a **Data
+Folder** its config names instead), `analysis/`, `qc/`, its own report —
+either standalone or as a replicate inside a Project.
 (Formerly called the "project directory".)
+
+**Data Folder**:
+The folder an Experiment Directory reads its recording from when its
+`tracking_config.yaml` names one with the top-level `data_folder:` key, in
+place of its own `data/` — so a study's Project can analyse a recording that
+lives, locked, somewhere else (a labdata run) without copying it. Written
+relative to the Experiment Directory, with forward slashes
+(`../../../../../runs/dtrack/2026/R-20261020-asmith-01/data`); an absolute
+path works but is warned about as not portable. The folder is only ever
+**read**: `analysis/`, `qc/`, the report, the run manifest and every sidecar
+are still written in the Experiment Directory, and nothing ever files,
+repairs or writes there. The key belongs to that one config — never under
+`global:`, never in a Project design, never copied into a new replicate. An
+Experiment Directory whose Data Folder is missing, is a file, or competes with
+a recording of its own is a Blocked Experiment, never an Unfiled Recording;
+two replicates of one Project reading the same folder are one, and the later
+in name order is reported as a **duplicate** (ADR-0018).
+_Avoid_: data_dir (pyflic's retired key), linked data, external data, data
+root
 
 **Unfiled Recording**:
 An Experiment Directory whose DTrack export sits loose at its root instead of
@@ -73,16 +93,22 @@ analysing it. The fix is a **repair**: `python -m
 pytrackinganalysis.clock_repair <experiment>` puts the lost time back into
 those three columns from each rollback onwards (snapped to whole hours when
 that is what was lost), changes nothing else, and keeps the untouched files
-in `data_original/` beside `data/`. Only elapsed time matters to the
+in `data_original/` beside `data/`. A recording read through a Data Folder is
+never repaired in place: `--out <new folder>` writes a complete repaired copy
+elsewhere, leaves the originals untouched, and the replicate's `data_folder:`
+is pointed at the copy. Only elapsed time matters to the
 analysis, so absolute wall-clock values after a repair are a reconstruction.
 _Avoid_: time drift (drift is gradual; this is a step), corrupt data (nothing
 is lost — the frames are intact), negative time
 
 **Blocked Experiment**:
 An Experiment Directory a run cannot use as it stands: an Unfiled Recording,
-a recording with no `tracking_config.yaml`, or a configured directory with no
-recording at all. Each reason names its own fix — file the recording,
-scaffold the config, supply the missing data. Blocked is a property of the
+a recording with no `tracking_config.yaml`, a configured directory with no
+recording at all, a Data Folder the loader cannot read (missing, a file, or
+beside a recording of the directory's own), or a **duplicate** — a second
+replicate reading a recording an earlier one already reads. Each reason names
+its own fix — file the recording, scaffold the config, supply the missing
+data, decide which replicate reads that recording. Blocked is a property of the
 Experiment Directory, never of the Project or the Member: a Member with four
 healthy replicates and one blocked replicate runs the four. Blocked
 Experiments are named before a Batch Run starts and again in its summary —

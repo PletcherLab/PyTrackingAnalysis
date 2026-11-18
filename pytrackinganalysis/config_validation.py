@@ -9,15 +9,24 @@ to a default calibration.
 :func:`validate_config` is the shared checker. The Hub's "Validate YAML" button,
 the Config Editor and anything else that wants to check a project before running
 it should call this rather than re-implementing the rules.
+
+:func:`config_warnings` is the other half: advice that never blocks a load or a
+save, because a typed experiment's problems are fatal (ADR-0001) and the thing
+being advised against still works — today, an absolute ``data_folder:``.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import PurePosixPath, PureWindowsPath
 
 import yaml
 
 from . import Parameters
+
+#: Mirrors :data:`layout.DATA_FOLDER_KEY` (ADR-0018); not imported, because
+#: layout imports the project module and this one is imported by the loader.
+DATA_FOLDER_KEY = 'data_folder'
 
 # Rig spellings accepted in the config, mapped to their canonical name.
 RIG_ALIASES = {
@@ -239,6 +248,13 @@ def validate_config(config) -> list[str]:
             "the default of [8] mm will be used."
         )
 
+    # data_folder: (ADR-0018) is a top-level key of this config alone. Whether
+    # its folder exists is the loader's question; here only its shape.
+    data_folder = config.get(DATA_FOLDER_KEY)
+    if data_folder is not None and not isinstance(data_folder, str):
+        problems.append(
+            f"{DATA_FOLDER_KEY} must be a folder path, not {data_folder!r}.")
+
     # Type-specific constraints (rig subset, required Light/NoLight, owned-field
     # conflicts). Empty for a Custom Experiment.
     problems += exp_type.validate(config)
@@ -261,3 +277,40 @@ def validate_config_file(path) -> list[str]:
     except OSError as err:
         return [f"Could not read the file: {err}"]
     return validate_config(config)
+
+
+def config_warnings(config) -> list[str]:
+    """Advice about *config* that never blocks a load or a save.
+
+    Today only ``data_folder:`` (ADR-0018): an absolute value works, but not
+    once the share is mounted under another letter or path, so a relative one
+    is portable and an absolute one is warned about. A backslash is a
+    separator on Windows only; forward slashes work everywhere.
+    """
+    if not isinstance(config, dict):
+        return []
+    value = config.get(DATA_FOLDER_KEY)
+    if not isinstance(value, str) or not value.strip():
+        return []
+    warnings = []
+    if PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute():
+        warnings.append(
+            f"{DATA_FOLDER_KEY}: {value} is an absolute path. It works, but it "
+            "is not portable: it breaks when the share is mounted somewhere "
+            "else. Prefer a path relative to this experiment's folder.")
+    if '\\' in value:
+        warnings.append(
+            f"{DATA_FOLDER_KEY}: {value} contains backslashes. Write forward "
+            "slashes — a backslash is a folder separator on Windows only.")
+    return warnings
+
+
+def config_file_warnings(path) -> list[str]:
+    """:func:`config_warnings` for the YAML document at *path*; empty when it
+    cannot be read (:func:`validate_config_file` reports that)."""
+    try:
+        with open(path, encoding='utf-8') as handle:
+            config = yaml.safe_load(handle)
+    except (OSError, yaml.YAMLError):
+        return []
+    return config_warnings(config)

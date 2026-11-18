@@ -8,8 +8,27 @@
 - **`tracking_regions`** - one entry per tube, well, or tracked animal region.
 - **`counting_regions`** - treatment labels and DTrack aliases for two-choice and counter assays.
 - **`scripts`** - optional experiment-level scripts run from the Hub's **Scripts** tile or from a Project Script (the `run_in_experiments` bridge - every replicate, or only ones named in its `only:` list).
+- **`data_folder`** - optional. Read this experiment's recording from another folder instead of its own `data/` (see below).
 
 Project-level scripts live in `project.yaml`, not in a replicate's `tracking_config.yaml`.
+
+## Reading a recording stored elsewhere: `data_folder`
+
+```
+data_folder: ../../../../../runs/dtrack/2026/R-20261020-asmith-01/data
+global:
+  ...
+```
+
+- The folder holds what `data/` would hold: the `.xlsx` and its `_Data_*.csv` files.
+- Write the path **relative to this experiment's folder**, with **forward slashes**. An absolute path works, but **Validate YAMLs** warns that it is not portable.
+- The folder is **only ever read**. `analysis/`, `qc/`, the report and `removed_regions.yaml` are still written in this experiment's folder. Nothing files, moves or repairs anything in the named folder.
+- It is a top-level key of this one config: never under `global:`, never in the Project design, and never copied into a new replicate.
+- The experiment is **blocked** when the folder is missing or is a file, or when this experiment's own `data/` (or its root) also holds a recording. An empty `data/` is fine.
+- Two replicates of one Project may not read the same folder: the second, in name order, is reported as a **duplicate** and not analyzed. Two *Projects* may read the same folder with different settings.
+- Leave the key out (or empty) and the experiment reads `data/` exactly as always.
+
+The Config Editor shows the key as **Data folder** on the Global tab.
 
 ## Creating a valid config
 
@@ -21,7 +40,7 @@ Project-level scripts live in `project.yaml`, not in a replicate's `tracking_con
 ## Rules
 
 - The file must be named exactly `tracking_config.yaml`.
-- It belongs at the Experiment Directory root, beside `data/`.
+- It belongs at the Experiment Directory root, beside `data/` (or beside nothing, when `data_folder:` names the recording's folder).
 - A Project root uses `project.yaml`; it should not contain its own `tracking_config.yaml`.
 - In a Project, enforced keys must match `project.yaml`'s `design:` section. Region treatments, aliases, fly counts, and rigs may differ between replicates.
 - `TWOCHOICETRACKER` and `TWOCHOICECOUNTER` need exactly two counting regions, each with an `alias`.

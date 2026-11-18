@@ -13,6 +13,7 @@ from . import Arena
 from . import config_validation
 from . import experiment_types
 from . import io_utils
+from . import layout
 from . import removals
 
 ## The rig spellings the config accepts. config_validation owns this table so
@@ -183,7 +184,9 @@ class Experiment:
     Primary organizer for a tracking experiment.
 
     Reads ``tracking_config.yaml`` from the project directory to configure
-    Parameters, then loads data from the ``data/`` subdirectory via Arena.
+    Parameters, then loads data from the ``data/`` subdirectory via Arena —
+    or, when the config names one with a top-level ``data_folder:``, from that
+    folder instead, which is only ever read (ADR-0018).
     Analysis outputs go to ``analysis/`` and QC outputs to ``qc/``.
 
     Directory layout expected::
@@ -216,6 +219,11 @@ class Experiment:
     sleep_threshold_min, interaction_distances : other parameter overrides
     """
 
+    #: Where the recording is read from — a :class:`layout.DataLocation`, set
+    #: by ``__init__`` (ADR-0018). The class default stands for an Experiment
+    #: assembled without ``__init__``, which reads its own ``data/``.
+    data_location = None
+
     def __init__(self, project_directory: str, force_preprocessing: bool = False,
                  config_path: str | None = None):
         """
@@ -236,14 +244,20 @@ class Experiment:
             *other* file's tracking type, rig calibration and cutoffs.
         """
         self.project_directory = os.path.abspath(project_directory)
-        self.data_path     = self._find_subdir('data') + '/'
-        self.analysis_path = os.path.join(self.project_directory, 'analysis') + '/'
-        self.qc_path       = os.path.join(self.project_directory, 'qc') + '/'
         if config_path is None:
             self.config_path = os.path.join(self.project_directory, 'tracking_config.yaml')
         else:
             self.config_path = config_path if os.path.isabs(config_path) \
                 else os.path.join(self.project_directory, config_path)
+        ## Where the recording is read from: this directory's own data/, or
+        ## the folder its config's data_folder: names (ADR-0018) — the one
+        ## answer layout.classify gives too. Resolved before anything is
+        ## created, so a reference that cannot be read writes nothing at all.
+        self.data_location = layout.require_data_location(
+            self.project_directory, config_path=self.config_path)
+        self.data_path     = self.data_location.path + '/'
+        self.analysis_path = os.path.join(self.project_directory, 'analysis') + '/'
+        self.qc_path       = os.path.join(self.project_directory, 'qc') + '/'
 
         # Create output directories (data/ must already exist with files in it)
         os.makedirs(self.analysis_path, exist_ok=True)
@@ -284,6 +298,15 @@ class Experiment:
             config_path=self.config_path,
             force_preprocessing=force_preprocessing,
         )
+        if self.data_location.referenced:
+            ## Arena's opt-in CSV exports write beside the recording. A
+            ## referenced recording is only ever read (ADR-0018).
+            self.arena.write_refusal = (
+                f"This replicate reads its recording from "
+                f"{layout.DATA_FOLDER_KEY}: {self.data_location.written} "
+                f"({self.data_location.path}), and nothing is ever written "
+                "there. Save the returned table yourself, or use "
+                "run_analysis(), which writes into analysis/.")
 
         # Facet cutoffs: fixed by the Experiment Type for a typed experiment,
         # otherwise read from the global: section (Custom). e.g. [10, 70].
@@ -525,22 +548,22 @@ class Experiment:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _find_subdir(self, name: str) -> str:
-        """Return the path of a subdirectory matching *name* (case-insensitive).
+    def _reference(self):
+        """The data location when the config names it with ``data_folder:``,
+        else None — the one test every "say where the data came from" site
+        uses, so a replicate reading its own ``data/`` prints what it always
+        did (ADR-0018)."""
+        location = self.data_location
+        return location if location is not None and location.referenced else None
 
-        Falls back to the lowercase name if no match exists (letting later code
-        raise a clear error about missing files).
-        """
-        try:
-            entries = os.listdir(self.project_directory)
-        except OSError:
-            return os.path.join(self.project_directory, name)
-        for entry in entries:
-            if entry.lower() == name.lower() and os.path.isdir(
-                os.path.join(self.project_directory, entry)
-            ):
-                return os.path.join(self.project_directory, entry)
-        return os.path.join(self.project_directory, name)
+    def _data_path_text(self) -> str:
+        """The data path as summaries print it: for a replicate that names
+        its data folder, the resolved path and the key as written, so a
+        reader can see where the recording came from (ADR-0018)."""
+        reference = self._reference()
+        if reference is None:
+            return self.data_path
+        return f"{self.data_path} ({layout.DATA_FOLDER_KEY}: {reference.written})"
 
     def _load_config(self) -> dict:
         if not os.path.isfile(self.config_path):
@@ -560,6 +583,11 @@ class Experiment:
         can be imperfect and still analysable, and refusing to load it would be a
         breaking change for existing projects.
         """
+        ## Advice, never a refusal: an absolute data_folder: works, it just
+        ## does not survive the share being mounted somewhere else.
+        for warning in config_validation.config_warnings(self.config):
+            logger.warning("%s: %s", self.config_path, warning)
+            print(f"Warning: {warning}")
         problems = config_validation.validate_config(self.config)
         if not problems:
             return
@@ -703,7 +731,7 @@ class Experiment:
             "",
             f"── Paths {'─' * (W - 8)}",
             f"  Project   : {self.project_directory}",
-            f"  Data      : {self.data_path}",
+            f"  Data      : {self._data_path_text()}",
             f"  Analysis  : {self.analysis_path}",
             f"  QC        : {self.qc_path}",
             "",
@@ -1725,6 +1753,14 @@ class Experiment:
             "facet_cutoffs": list(self.facet_cutoffs) if self.facet_cutoffs is not None else None,
             "tracking_type": self.parameters.get_tracking_type().name,
         }
+        reference = self._reference()
+        if reference is not None:
+            ## Where the recording came from, as the config says it and as it
+            ## resolved on this run (ADR-0018).
+            payload["data_location"] = {
+                "written": reference.written,
+                "resolved": reference.path,
+            }
         try:
             io_utils.atomic_write_text(
                 os.path.join(self.analysis_path, self._RUN_MANIFEST),
@@ -1955,10 +1991,11 @@ class Experiment:
             ("Tracking rig", str(global_cfg.get("tracking_rig", "—"))),
         ]
         metadata += self._cover_phase_and_region_metadata(global_cfg)
-        metadata += [
-            ("Project", os.path.abspath(self.project_directory)),
-            ("Generated", _dt.now().strftime("%Y-%m-%d %H:%M")),
-        ]
+        metadata.append(("Project", os.path.abspath(self.project_directory)))
+        if self._reference() is not None:
+            ## The recording is not in this folder; say where it is.
+            metadata.append(("Data", self._data_path_text()))
+        metadata.append(("Generated", _dt.now().strftime("%Y-%m-%d %H:%M")))
         # Title/intro come from the Experiment Type (ADR-0001): a Valence report
         # says "Valence Experiment Report" and carries the assay's intro.
         status_lines = [line for line in (self._qc_status_line(qc_cutoff),
@@ -2415,7 +2452,7 @@ class Experiment:
         lines = [
             f"Experiment: {self.arena.experiment_name}",
             f"  Project directory : {self.project_directory}",
-            f"  Data path         : {self.data_path}",
+            f"  Data path         : {self._data_path_text()}",
             f"  Analysis path     : {self.analysis_path}",
             f"  QC path           : {self.qc_path}",
             f"  Experiment type   : {self.experiment_type.display_name}",
@@ -2445,11 +2482,18 @@ def _is_experiment_dir(path: str) -> bool:
     Requires:
       - tracking_config.yaml present (case-insensitive)
       - a subdirectory named 'data' (case-insensitive) that contains at least one .xlsx file
+
+    A directory whose config names ``data_folder:`` always qualifies: the
+    user said where its recording is, so a reference the loader refuses is a
+    result to report, not a directory to skip without a word (ADR-0018).
     """
     entries = {e.lower(): e for e in os.listdir(path)}
 
     if 'tracking_config.yaml' not in entries:
         return False
+
+    if layout.data_location(path).referenced:
+        return True
 
     data_name = entries.get('data')
     if data_name is None:

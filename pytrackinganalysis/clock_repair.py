@@ -29,9 +29,16 @@ the files in place, with the originals kept beside ``data/``, keeps what is on
 disk the single source of truth: the analysis never quietly disagrees with what
 a spreadsheet would show for the same file.
 
+A recording read through ``data_folder:`` (ADR-0018) is never rewritten in
+place — it may be locked, and other analyses may read it. The **out-of-place**
+mode (``out_dir=`` / ``--out``) writes a complete repaired copy of the data
+folder somewhere new instead, leaves the originals untouched, and the
+replicate is pointed at the copy. It works for any replicate.
+
 Command line::
 
     python -m pytrackinganalysis.clock_repair <experiment or data directory> [--dry-run]
+    python -m pytrackinganalysis.clock_repair <experiment or data directory> --out <new folder>
 """
 
 from __future__ import annotations
@@ -66,6 +73,16 @@ DATA_GLOB = "*_Data_*.csv"
 
 #: Where the untouched originals go, beside ``data/``.
 DEFAULT_BACKUP_DIRNAME = "data_original"
+
+#: The notes an out-of-place repair leaves in its copy.
+README_NAME = "README.txt"
+#: ...or under this name, when the export already carries a README.txt that
+#: must be copied byte for byte like every other file.
+FALLBACK_README_NAME = "README_clock_repair.txt"
+
+#: The out-of-place option, as every refusal and the loader's error spell it.
+OUT_OF_PLACE_HINT = ("    python -m pytrackinganalysis.clock_repair "
+                     "<experiment directory> --out <new folder>")
 
 #: ``Time`` column layouts we know how to shift. Each pairs the ``strptime``
 #: format with a renderer that reproduces the original padding (DTrack writes
@@ -118,6 +135,8 @@ class RepairReport:
     rollbacks: list[Rollback]
     dry_run: bool
     backup_dir: Path | None = None
+    out_dir: Path | None = None
+    """Where an out-of-place repair wrote its copy; None in place."""
     rows_shifted: int = 0
     minutes_before: float = 0.0
     """Elapsed minutes the export claims as recorded (last minus first frame)."""
@@ -187,7 +206,10 @@ def raise_if_rolled_back(name: str, frames, msec,
         "Elapsed time comes from the export's clock columns, so every frame after "
         "a rollback looks earlier than it is: phases empty out and flies are "
         "excluded for no reason. Put the lost time back (the originals are kept) with:\n"
-        "    python -m pytrackinganalysis.clock_repair <experiment directory>"
+        "    python -m pytrackinganalysis.clock_repair <experiment directory>\n"
+        "or, to leave the originals untouched — the only way for an experiment "
+        "that reads its recording through data_folder: — write a repaired copy "
+        "elsewhere and point data_folder: at it:\n" + OUT_OF_PLACE_HINT
     )
 
 
@@ -195,16 +217,34 @@ def raise_if_rolled_back(name: str, frames, msec,
 # Repair
 # ---------------------------------------------------------------------------
 
+def _referenced_location(target):
+    """The data location when *target* is an Experiment Directory that names
+    its data folder with ``data_folder:``; None for a data folder itself or
+    a directory that reads its own ``data/``."""
+    from . import layout   # lazy: the trackers import this module
+
+    if export_files(target):
+        return None
+    location = layout.data_location(target)
+    return location if location.referenced else None
+
+
 def resolve_data_dir(target) -> Path:
-    """Accept an Experiment Directory or its ``data/`` folder (any case)."""
+    """Accept an Experiment Directory or its data folder: ``data/`` (any
+    case), or the folder its ``data_folder:`` names — the loader's own
+    answer (ADR-0018)."""
+    from . import layout   # lazy: the trackers import this module
+
     target = Path(target)
     if not target.is_dir():
         raise FileNotFoundError(f"Not a directory: {target}")
     if export_files(target):
         return target
-    for entry in sorted(os.listdir(target)):
-        if entry.lower() == "data" and (target / entry).is_dir():
-            return target / entry
+    location = layout.data_location(target)
+    if location.problem:
+        raise layout.DataLocationError(location.problem)
+    if os.path.isdir(location.path):
+        return Path(location.path)
     raise FileNotFoundError(
         f"No DTrack export ({DATA_GLOB}) in {target} or a data/ folder beneath it.")
 
@@ -346,18 +386,114 @@ def backup_originals(files: Sequence[Path], backup_dir: Path, report: RepairRepo
     (backup_dir / "README.txt").write_text("\n".join(lines), encoding="utf-8")
 
 
-def repair_export(target, *, backup_dir=None, dry_run: bool = False,
+def _inside(path, folder) -> bool:
+    """*path* is *folder* or lies beneath it, compared as the OS resolves them."""
+    path = os.path.normcase(os.path.realpath(path))
+    folder = os.path.normcase(os.path.realpath(folder))
+    try:
+        return os.path.commonpath([path, folder]) == folder
+    except ValueError:                      # different drives
+        return False
+
+
+def _check_out_dir(out_dir: Path, data_dir: Path) -> None:
+    """Refuse an out-of-place destination before anything is read or written."""
+    if _inside(out_dir, data_dir):
+        raise ValueError(
+            f"{out_dir} is inside the data folder {data_dir}. The repaired copy "
+            "must go somewhere else: nothing is ever written at a data location.")
+    if out_dir.exists() and (not out_dir.is_dir() or any(out_dir.iterdir())):
+        raise FileExistsError(
+            f"{out_dir} already exists and is not empty, so nothing was written. "
+            "Name a new folder, or an empty one.")
+
+
+def _copy_tree(source: Path, destination: Path) -> None:
+    """Copy every file under *source* into *destination*, byte for byte.
+
+    Contents and modification times only — not permission bits, so a copy of
+    a locked recording is an ordinary, writable folder.
+    """
+    for directory, _dirs, names in os.walk(source):
+        here = destination / os.path.relpath(directory, source)
+        here.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            original = os.path.join(directory, name)
+            copied = here / name
+            shutil.copyfile(original, copied)
+            status = os.stat(original)
+            os.utime(copied, ns=(status.st_atime_ns, status.st_mtime_ns))
+
+
+def write_repaired_copy(data_dir: Path, out_dir: Path, offset, report: RepairReport,
+                        *, msec_only: bool = False) -> None:
+    """Copy the whole data folder into *out_dir*, then repair the copies.
+
+    Every file is copied byte for byte; the export files are then rewritten
+    exactly as an in-place repair rewrites them. The originals are only read,
+    so no backup is made.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _copy_tree(data_dir, out_dir)
+    for path in report.files:
+        shifted = rewrite_file(out_dir / path.name, offset, msec_only=msec_only)
+        report.rows_shifted += shifted
+        report.messages.append(f"  rewrote {path.name}: {shifted} row(s) shifted")
+    readme = README_NAME if not (data_dir / README_NAME).exists() \
+        else FALLBACK_README_NAME
+    lines = [
+        "A repaired copy of a DTrack export, written by",
+        f"pytrackinganalysis.clock_repair on {datetime.now():%Y-%m-%d %H:%M}.",
+        "",
+        "The source was left untouched:",
+        f"  {data_dir}",
+        "",
+        "The recording clock was set back mid-run:",
+        *(f"  - {r.describe()}" for r in report.rollbacks),
+        "",
+        f"In the {DATA_GLOB} files here, MSec, Time and Millisec were shifted",
+        "forward by the lost time from each rollback onwards. Every other column,",
+        "and every other file, is an exact copy of the source.",
+        "To analyse this copy, point the experiment's data_folder: at this folder.",
+        "",
+    ]
+    (out_dir / readme).write_text("\n".join(lines), encoding="utf-8")
+
+
+def repair_export(target, *, backup_dir=None, out_dir=None, dry_run: bool = False,
                   msec_only: bool = False,
                   tolerance_ms: float = ROLLBACK_TOLERANCE_MS,
                   log: Callable[[str], None] | None = print) -> RepairReport:
     """Find the rollbacks in an export and put the lost time back.
 
-    *target* is an Experiment Directory or its ``data/`` folder. Nothing is
-    written when there is no rollback or when *dry_run* is set; otherwise the
-    originals are copied to *backup_dir* (default ``<experiment>/data_original``)
-    before any file is rewritten.
+    *target* is an Experiment Directory or its data folder. Nothing is
+    written when there is no rollback or when *dry_run* is set.
+
+    In place (the default), the originals are copied to *backup_dir* (default
+    ``<experiment>/data_original``) before any file is rewritten. An
+    Experiment Directory that reads its recording through ``data_folder:`` is
+    refused: that recording is only ever read (ADR-0018).
+
+    Out of place (*out_dir*), a complete repaired copy of the data folder is
+    written to *out_dir*, which must not exist yet or must be empty; the
+    originals are untouched, so there is no backup. Works for any target.
     """
+    if out_dir is not None and backup_dir is not None:
+        raise ValueError("backup_dir and out_dir do not mix: an out-of-place "
+                         "repair leaves the originals untouched, so it makes "
+                         "no backup.")
+    referenced = _referenced_location(Path(target)) if Path(target).is_dir() else None
+    if referenced is not None and out_dir is None and not dry_run:
+        raise ValueError(
+            f"{target} reads its recording from data_folder: "
+            f"{referenced.written} ({referenced.path}), and clock repair never "
+            "rewrites a referenced recording in place — nothing was changed. "
+            "Write a repaired copy elsewhere and point data_folder: at it:\n"
+            + OUT_OF_PLACE_HINT.replace("<experiment directory>", str(target)))
     data_dir = resolve_data_dir(target)
+    if out_dir is not None:
+        out_dir = Path(out_dir)
+        _check_out_dir(out_dir, data_dir)
     files = export_files(data_dir)
     clock = load_frame_clock(files)
     frames = clock["Frame"].to_numpy()
@@ -389,6 +525,18 @@ def repair_export(target, *, backup_dir=None, dry_run: bool = False,
         say("Dry run: no files changed.")
         return report
 
+    if out_dir is not None:
+        before = len(report.messages)
+        write_repaired_copy(data_dir, out_dir, offset, report, msec_only=msec_only)
+        report.out_dir = out_dir
+        if log is not None:
+            for message in report.messages[before:]:
+                log(message)
+        say(f"Done: {report.rows_shifted} row(s) shifted across {len(files)} "
+            f"file(s), written to {out_dir}. The originals in {data_dir} are "
+            "untouched.")
+        return report
+
     backup_dir = Path(backup_dir) if backup_dir else data_dir.parent / DEFAULT_BACKUP_DIRNAME
     backup_originals(files, backup_dir, report)
     report.backup_dir = backup_dir
@@ -405,21 +553,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m pytrackinganalysis.clock_repair",
         description="Put back the time a DTrack export lost when the recording "
-                    "clock was set back mid-run. The originals are kept beside data/.")
+                    "clock was set back mid-run. The originals are kept beside data/, "
+                    "or, with --out, left untouched while a repaired copy is "
+                    "written elsewhere.")
     parser.add_argument("target", help="Experiment Directory (or its data/ folder)")
     parser.add_argument("--dry-run", action="store_true",
                         help="report the rollbacks and change nothing")
     parser.add_argument("--backup-dir",
                         help=f"where the originals go (default: <experiment>/{DEFAULT_BACKUP_DIRNAME})")
+    parser.add_argument("--out", metavar="FOLDER",
+                        help="write a complete repaired copy of the data folder "
+                             "here (a new or empty folder) and leave the originals "
+                             "untouched; the only way to repair a recording read "
+                             "through data_folder:")
     parser.add_argument("--msec-only", action="store_true",
                         help="shift MSec only; leave Time/Millisec as recorded")
     parser.add_argument("--tolerance-ms", type=float, default=ROLLBACK_TOLERANCE_MS,
                         help="smallest backward step treated as a rollback "
                              f"(default {ROLLBACK_TOLERANCE_MS:g} ms)")
     args = parser.parse_args(argv)
+    if args.out and args.backup_dir:
+        parser.error("--out and --backup-dir do not mix: --out leaves the "
+                     "originals untouched, so there is nothing to back up")
     try:
-        repair_export(args.target, backup_dir=args.backup_dir, dry_run=args.dry_run,
-                      msec_only=args.msec_only, tolerance_ms=args.tolerance_ms)
+        repair_export(args.target, backup_dir=args.backup_dir, out_dir=args.out,
+                      dry_run=args.dry_run, msec_only=args.msec_only,
+                      tolerance_ms=args.tolerance_ms)
     except (OSError, ValueError) as err:
         print(f"Error: {err}", file=sys.stderr)
         return 1

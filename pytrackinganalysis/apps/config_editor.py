@@ -467,7 +467,12 @@ class ConfigEditorWindow(QMainWindow):
             return
         self._disk_text = yaml.safe_dump(config, default_flow_style=False, sort_keys=False)
         self._refresh_dirty()
-        QMessageBox.information(self, "Saved", f"Config saved to:\n{path}")
+        message = f"Config saved to:\n{path}"
+        ## Advice, never a refusal (an absolute data_folder: still works).
+        notes = config_validation.config_warnings(config)
+        if notes:
+            message += "\n\nNote:\n  • " + "\n  • ".join(notes)
+        QMessageBox.information(self, "Saved", message)
 
     def _dump_config(self) -> dict:
         """The document to write: the loaded YAML with this editor's sections replaced.
@@ -491,6 +496,15 @@ class ConfigEditorWindow(QMainWindow):
         for key, value in dumped_global.items():
             merged_global.setdefault(key, value)
         config["global"] = merged_global
+
+        # data_folder: is top level and this config's alone (ADR-0018). An
+        # empty field means "read data/", so the key is dropped rather than
+        # written blank; a config that never had one stays without it.
+        data_folder = self._global_tab.data_folder_value()
+        if data_folder:
+            config["data_folder"] = data_folder
+        else:
+            config.pop("data_folder", None)
 
         # The region tabs always emit their key, so an empty table means "the
         # user deleted every region" — not "this tab has nothing to say".

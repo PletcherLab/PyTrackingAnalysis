@@ -87,10 +87,16 @@ def has_experiment_data(path) -> bool:
     What does not count is an Excel ``~$`` lock file: it is not a recording,
     and treating one as data offered to scaffold a config for a folder whose
     workbook had been moved away with Excel still open.
+
+    A replicate whose config names ``data_folder:`` is asked about that
+    folder instead (ADR-0018); one the loader would refuse holds nothing.
     """
     from . import layout
 
-    data = layout.data_dir(str(path))
+    location = layout.data_location(str(path))
+    if location.problem:
+        return False
+    data = location.path
     try:
         entries = os.listdir(data)
     except OSError:
@@ -104,13 +110,18 @@ def tracking_regions_in_data(path) -> list[str]:
     """The tracking-region names in an experiment's DTrack export (the ROI
     sheet's ``Tracking`` rows), in natural order — the plate as recorded, for
     a type that takes its plate from the data (Paired Open Field, ADR-0016).
-    Empty when there is no readable export."""
+    Read from wherever the replicate's recording is — its own ``data/`` or
+    the folder its ``data_folder:`` names (ADR-0018). Empty when there is no
+    readable export, or when the loader would refuse the data location."""
     import pandas as pd
     from natsort import natsorted
 
     from . import layout
 
-    data = layout.data_dir(str(path))
+    location = layout.data_location(str(path))
+    if location.problem:
+        return []
+    data = location.path
     try:
         workbooks = sorted(entry for entry in os.listdir(data)
                            if entry.lower().endswith(".xlsx")
@@ -258,13 +269,24 @@ class Project:
         self.arena = _NameShim(self.name)  # AI-payload compatibility
 
         # ---- discover replicates -------------------------------------
+        from . import layout
+
         self.experiment_names: list[str] = []
         self.configs: dict[str, dict] = {}
+        #: Where each replicate reads its recording (ADR-0018).
+        self.data_locations: dict = {}
+        #: Replicates skipped because an earlier one (in sorted order)
+        #: already reads their recording: ``{skipped: kept}``.
+        self.duplicates: dict[str, str] = {}
         #: Real paths already taken, so a symlinked copy of a replicate is not
         #: analyzed twice and stacked into the Combined Analysis under two
         #: labels — the same "no recording twice in one run" rule the Batch
         #: walk enforces (ADR-0011), one level down.
         seen: set[str] = set()
+        #: ...and the same rule for two replicates whose data_folder: names
+        #: one recording — the rule layout.experiments_in applies, so the
+        #: Project and Batch discovery agree on who is a duplicate.
+        reads = layout.DataLocations()
         for entry in sorted(os.listdir(self.project_directory)):
             sub = os.path.join(self.project_directory, entry)
             if os.path.isdir(sub) and is_experiment_dir(sub):
@@ -272,10 +294,17 @@ class Project:
                 if real in seen:
                     continue
                 seen.add(real)
-                self.experiment_names.append(entry)
                 with open(os.path.join(sub, CONFIG_FILENAME),
                           encoding="utf-8") as handle:
-                    self.configs[entry] = yaml.safe_load(handle) or {}
+                    config = yaml.safe_load(handle) or {}
+                location = layout.data_location(sub, config=config)
+                first = reads.claim(entry, location)
+                if first is not None:
+                    self.duplicates[entry] = first
+                    continue
+                self.experiment_names.append(entry)
+                self.configs[entry] = config
+                self.data_locations[entry] = location
         if not self.experiment_names and not self.design:
             ## With a design in project.yaml an empty Project is legal — it
             ## was just created; replicates get scaffolded from the design.
@@ -294,6 +323,17 @@ class Project:
         self.experiment_scripts: list[dict] = _script_list("experiment_scripts")
 
         self.warnings: list[str] = []
+        ## Named, never dropped silently: a duplicate is reported the way a
+        ## Blocked Experiment is, and a reference the loader will refuse is
+        ## said here, before a run fails on it (ADR-0018).
+        for name, first in self.duplicates.items():
+            self.warnings.append(
+                f"{name} is a duplicate: it "
+                + layout.duplicate_detail(
+                    first, self.data_locations[first]))
+        for name, location in self.data_locations.items():
+            if location.problem:
+                self.warnings.append(f"{name}: {location.problem}")
         self._validate_design_match()
 
     def find_script(self, name: str) -> dict | None:
@@ -541,11 +581,19 @@ class Project:
         """A tracking_config.yaml for a new replicate: a copy of the first
         replicate's config when one exists (design-conformant by validation),
         else built from the project design (rig and region assignments left
-        for the user)."""
+        for the user).
+
+        Never with the first replicate's ``data_folder:``: that names *its*
+        recording, and a copy would make the new replicate a duplicate of it
+        (ADR-0018). The new replicate gets its own ``data/``."""
         import copy
 
+        from . import layout
+
         if self.experiment_names:
-            return copy.deepcopy(self.configs[self.experiment_names[0]])
+            config = copy.deepcopy(self.configs[self.experiment_names[0]])
+            config.pop(layout.DATA_FOLDER_KEY, None)
+            return config
         g = dict(self.design.get("global") or {})
         cfg = self.experiment_type.build_config(
             facet_cutoffs=g.get("facet_cutoffs"),

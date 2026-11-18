@@ -1532,12 +1532,34 @@ class HubWindow(QMainWindow):
                 + "\n\nNothing was copied. Opening the scaffolded config in "
                 "the Config Editor instead.")
             return False
+        from .. import layout as layout_mod
+        from ..io_utils import atomic_write_text
+
+        ## data_folder: names the SOURCE experiment's recording; copied, it
+        ## would make this replicate read someone else's data (ADR-0018). The
+        ## new replicate reads its own data/, so the key stays behind.
+        inherited = isinstance(config, dict) \
+            and config.get(layout_mod.DATA_FOLDER_KEY) is not None
         try:
-            shutil.copyfile(source, target)
+            if inherited:
+                kept = {k: v for k, v in config.items()
+                        if k != layout_mod.DATA_FOLDER_KEY}
+                atomic_write_text(
+                    str(target),
+                    lambda handle: _yaml.safe_dump(kept, handle, sort_keys=False,
+                                                   allow_unicode=True))
+                config = kept
+            else:
+                shutil.copyfile(source, target)
         except Exception as err:  # noqa: BLE001
             self._warn(f"Could not copy '{source.name}':\n{err}")
             return False
         self._log.append_line(f"Copied {source} to {target}")
+        if inherited:
+            self._log.append_line(
+                f"[config] {name}: {layout_mod.DATA_FOLDER_KEY}: was not copied "
+                f"— it names {source.parent.name}'s recording; {name} reads "
+                "its own data/.")
         ## Conforming is not the same as complete — a copied config can still
         ## be missing its region treatments. Say so rather than let the
         ## replicate fail at run time.
@@ -3631,7 +3653,7 @@ class HubWindow(QMainWindow):
         # too, so an unknown rig or a missing movie calibration is reported here
         # rather than surfacing mid-analysis or silently falling back to defaults.
         from .. import project as prj
-        from ..config_validation import validate_config_file
+        from ..config_validation import config_file_warnings, validate_config_file
 
         targets = self._yaml_validation_targets()
         if not targets:
@@ -3654,6 +3676,11 @@ class HubWindow(QMainWindow):
                     self._log_issue(f"[validate]   • {problem}")
             else:
                 self._log.append_line(f"[validate] {path} is valid.")
+            ## Advice that is not a problem: an absolute data_folder: works,
+            ## it is just not portable (ADR-0018).
+            if path.name != prj.PROJECT_FILENAME:
+                for warning in config_file_warnings(str(path)):
+                    self._log.append_line(f"[validate]   note: {warning}")
         summary = (f"[validate] {len(targets)} file(s) checked, "
                    f"{total} problem(s) found.")
         if total:
@@ -4507,6 +4534,8 @@ class ExperimentConfigsDialog(QDialog):
         project = self._hub._current_project()
         if project is not None:
             self._project = project
+        from .. import layout as layout_mod
+
         project = self._project
         root = Path(project.project_directory)
 
@@ -4518,12 +4547,15 @@ class ExperimentConfigsDialog(QDialog):
         for name, has_config in self._rows:
             r = self._table.rowCount()
             self._table.insertRow(r)
-            data = root / name / "data"
+            ## Wherever the loader reads: data/ (any case), or data_folder:.
+            location = layout_mod.data_location(root / name)
+            data = Path(location.path)
             try:
                 count = sum(1 for entry in data.iterdir() if entry.is_file())
                 files = f"{count} file(s)" if count else "empty"
             except OSError:
-                files = "no data/ folder"
+                files = (f"{layout_mod.DATA_FOLDER_KEY} not found"
+                         if location.referenced else "no data/ folder")
             for col, value in enumerate(
                     (name, "yes" if has_config else "missing", files)):
                 self._table.setItem(r, col, QTableWidgetItem(value))
