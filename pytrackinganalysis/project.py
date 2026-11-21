@@ -222,6 +222,39 @@ def write_replicate_hypotheses(project_dir, hypotheses) -> list[str]:
     return changed
 
 
+def new_replicate_config(config: dict) -> dict:
+    """*config* — another replicate's — as a new replicate takes it: a copy
+    without what belongs to that one recording.
+
+    ``data_folder:`` names *its* recording, and a copy would make the new
+    replicate a duplicate of it (ADR-0018), so the key stays behind. Of
+    ``about:`` only the part replicates share comes along — who ran it, the
+    series, the flies, the protocol, and what each factor and level the
+    config declares means, a level's whole entry included. The title, the
+    purpose, the notes and ``run:`` describe that recording alone
+    (ADR-0019); a section with nothing to share leaves no key.
+
+    A config with neither key comes back equal to what it was.
+    """
+    import copy
+
+    from . import about as about_mod
+    from . import layout
+
+    config = copy.deepcopy(config)
+    config.pop(layout.DATA_FOLDER_KEY, None)
+    if about_mod.ABOUT_KEY in config:
+        global_cfg = config.get("global")
+        factors = (global_cfg.get("experimental_design_factors")
+                   if isinstance(global_cfg, dict) else None)
+        shared = about_mod.shared_about(config[about_mod.ABOUT_KEY], factors or {})
+        if shared:
+            config[about_mod.ABOUT_KEY] = shared
+        else:
+            del config[about_mod.ABOUT_KEY]
+    return config
+
+
 def _normalize(value):
     """Comparison form for design values: numbers as floats, sequences as
     lists of normalized items, everything else as-is."""
@@ -585,15 +618,11 @@ class Project:
 
         Never with the first replicate's ``data_folder:``: that names *its*
         recording, and a copy would make the new replicate a duplicate of it
-        (ADR-0018). The new replicate gets its own ``data/``."""
-        import copy
-
-        from . import layout
-
+        (ADR-0018). The new replicate gets its own ``data/``. And of the
+        first replicate's ``about:``, only the part replicates share
+        (:func:`new_replicate_config`, ADR-0019)."""
         if self.experiment_names:
-            config = copy.deepcopy(self.configs[self.experiment_names[0]])
-            config.pop(layout.DATA_FOLDER_KEY, None)
-            return config
+            return new_replicate_config(self.configs[self.experiment_names[0]])
         g = dict(self.design.get("global") or {})
         cfg = self.experiment_type.build_config(
             facet_cutoffs=g.get("facet_cutoffs"),

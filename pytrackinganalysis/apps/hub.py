@@ -1532,7 +1532,9 @@ class HubWindow(QMainWindow):
                 + "\n\nNothing was copied. Opening the scaffolded config in "
                 "the Config Editor instead.")
             return False
+        from .. import about as about_mod
         from .. import layout as layout_mod
+        from .. import project as prj
         from ..io_utils import atomic_write_text
 
         ## data_folder: names the SOURCE experiment's recording; copied, it
@@ -1540,10 +1542,14 @@ class HubWindow(QMainWindow):
         ## new replicate reads its own data/, so the key stays behind.
         inherited = isinstance(config, dict) \
             and config.get(layout_mod.DATA_FOLDER_KEY) is not None
+        ## about: describes the SOURCE recording. What replicates share of it
+        ## comes along; its title, purpose, notes and run: are that
+        ## recording's alone and stay behind (ADR-0019). A config with
+        ## neither is still copied byte for byte, comments and all.
+        kept = prj.new_replicate_config(config)
+        described = kept.get(about_mod.ABOUT_KEY) != config.get(about_mod.ABOUT_KEY)
         try:
-            if inherited:
-                kept = {k: v for k, v in config.items()
-                        if k != layout_mod.DATA_FOLDER_KEY}
+            if inherited or described:
                 atomic_write_text(
                     str(target),
                     lambda handle: _yaml.safe_dump(kept, handle, sort_keys=False,
@@ -1560,6 +1566,11 @@ class HubWindow(QMainWindow):
                 f"[config] {name}: {layout_mod.DATA_FOLDER_KEY}: was not copied "
                 f"— it names {source.parent.name}'s recording; {name} reads "
                 "its own data/.")
+        if described:
+            self._log.append_line(
+                f"[config] {name}: of {about_mod.ABOUT_KEY}: only what "
+                "replicates share was copied — the title, the purpose, the "
+                f"notes and run: describe {source.parent.name} alone.")
         ## Conforming is not the same as complete — a copied config can still
         ## be missing its region treatments. Say so rather than let the
         ## replicate fail at run time.

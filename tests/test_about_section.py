@@ -488,3 +488,157 @@ def test_a4_the_project_dialog_writes_back_the_section_now_on_disk(
     assert read_config(tmp_path / "Rep1")[KEY] == FULL
     assert read_config(tmp_path / "Rep2")[KEY] == {"title": "As first typed"}
     prj.Project(str(tmp_path))                               # and it still loads
+
+
+# ---------------------------------------------------------------------------
+# A7 / T4: a new replicate starts from the first one's shared About
+# ---------------------------------------------------------------------------
+
+#: What replicate recordings share of :data:`FULL`: no title, purpose, notes
+#: or run, and no key of its own; each level's whole entry.
+SHARED = {key: FULL[key] for key in ("experimenter", "series", "organism", "sex",
+                                     "age_at_start", "protocol", "factors")}
+DATA_FOLDER = "../../runs/R1/data"
+
+
+def study(root, about=None, data_folder=None, names=("Rep1",)):
+    """A Project at *root* whose replicates carry *about* (and, when given,
+    a ``data_folder:``)."""
+    from test_project import _make_project
+
+    def config_for(_name):
+        config = valence_config(about=about)
+        return config if data_folder is None else {"data_folder": data_folder, **config}
+
+    root.mkdir(parents=True, exist_ok=True)
+    return _make_project(root, names=names, with_analysis=False, config_for=config_for)
+
+
+@pytest.mark.parametrize("data_folder", [None, DATA_FOLDER],
+                         ids=["own data", "data_folder"])
+def test_a7_a_scaffolded_replicate_holds_the_shared_about_only(tmp_path, data_folder):
+    project = study(tmp_path / "Study", about=full_about(), data_folder=data_folder)
+
+    path = project.scaffold_replicate("Rep2")
+
+    with open(path, encoding="utf-8") as handle:
+        scaffolded = yaml.safe_load(handle)
+    assert scaffolded[KEY] == SHARED
+    assert not {"run", "title", "purpose", "notes", "x_lab"} & set(scaffolded[KEY])
+    ctrl = scaffolded[KEY]["factors"]["Genotype"]["levels"]["Ctrl"]
+    assert ctrl == FULL["factors"]["Genotype"]["levels"]["Ctrl"]     # mapping keys and all
+    assert "data_folder" not in scaffolded
+    assert scaffolded["global"] == valence_config()["global"]
+    assert read_config(tmp_path / "Study" / "Rep1")[KEY] == FULL     # the first is untouched
+    assert config_validation.config_warnings(scaffolded) == []
+    prj.Project(str(tmp_path / "Study"))                             # and it loads
+
+
+def test_t4_scaffolding_from_a_replicate_with_no_section_is_as_it_was(tmp_path):
+    project = study(tmp_path / "Study")
+    first = read_config(tmp_path / "Study" / "Rep1")
+
+    path = project.scaffold_replicate("Rep2")
+
+    assert KEY not in project.scaffold_replicate_config()
+    with open(path, encoding="utf-8") as handle:
+        assert handle.read() == yaml.safe_dump(first, sort_keys=False,
+                                               allow_unicode=True)
+
+
+@pytest.mark.parametrize("section", [
+    {"title": "Only this recording's", "purpose": "Its own.", "notes": "Its own.",
+     "run": "R-20261121-test-01"},
+    "just some text",
+    {},
+], ids=["nothing shared", "not a mapping", "empty"])
+def test_a_section_with_nothing_to_share_leaves_no_key_behind(tmp_path, section):
+    project = study(tmp_path / "Study", about=section)
+    assert KEY not in project.scaffold_replicate_config()
+
+
+def test_scaffolding_leaves_out_a_level_the_design_does_not_declare(tmp_path):
+    """Its description would only draw a warning in the new replicate too."""
+    section = full_about()
+    section["factors"]["Genotype"]["levels"]["Gone"] = "a level of an earlier design"
+    section["factors"]["Sex"] = {"kind": "sex"}
+    project = study(tmp_path / "Study", about=section)
+
+    assert project.scaffold_replicate_config()[KEY] == SHARED
+
+
+def copy_into_new_replicate(qapp, tmp_path, monkeypatch, source_config, text=None):
+    """Create ``Rep2`` in a Project and take **Copy config from…**, choosing a
+    config outside the Project. Returns ``(source path, target path, log)``."""
+    from test_project import _create_then_copy
+
+    study(tmp_path / "Study")
+    earlier = tmp_path / "Earlier" / "RepA"
+    earlier.mkdir(parents=True)
+    source = earlier / "tracking_config.yaml"
+    if text is None:
+        write_config(earlier, source_config)
+    else:
+        source.write_text(text, encoding="utf-8")
+    win, warned, launched, _told = _create_then_copy(
+        qapp, tmp_path / "Study", monkeypatch, str(source))
+    try:
+        assert not warned and not launched
+        log = win._log.toPlainText()
+    finally:
+        win.close()
+    return source, tmp_path / "Study" / "Rep2" / "tracking_config.yaml", log
+
+
+@pytest.mark.parametrize("data_folder", [None, DATA_FOLDER],
+                         ids=["own data", "data_folder"])
+def test_t4_copy_config_from_takes_the_shared_about_only(
+        qapp, tmp_path, monkeypatch, data_folder):
+    config = valence_config(about=full_about(), tracking_rig="arena_max")
+    if data_folder is not None:
+        config = {"data_folder": data_folder, **config}
+
+    source, target, _log = copy_into_new_replicate(qapp, tmp_path, monkeypatch, config)
+
+    copied = yaml.safe_load(target.read_text(encoding="utf-8"))
+    assert copied[KEY] == SHARED
+    assert "data_folder" not in copied
+    assert copied["global"]["tracking_rig"] == "arena_max"           # the copy, not the scaffold
+    assert {k: v for k, v in copied.items() if k != KEY} == \
+        {k: v for k, v in config.items() if k not in (KEY, "data_folder")}
+    assert yaml.safe_load(source.read_text(encoding="utf-8")) == config   # source untouched
+    assert "Rep2" in prj.Project(str(tmp_path / "Study")).experiment_names
+
+
+def test_t4_a_config_with_no_section_is_still_copied_byte_for_byte(
+        qapp, tmp_path, monkeypatch):
+    text = ("# Plate 3, as loaded on the day.\n"
+            + yaml.safe_dump(valence_config(tracking_rig="arena_max"), sort_keys=False)
+            + "# trailing note\n")
+
+    source, target, _log = copy_into_new_replicate(qapp, tmp_path, monkeypatch,
+                                                   None, text=text)
+
+    assert target.read_bytes() == source.read_bytes()
+    assert target.read_text(encoding="utf-8") == text
+
+
+def test_t4_a_section_holding_only_what_is_shared_is_copied_byte_for_byte(
+        qapp, tmp_path, monkeypatch):
+    """Nothing in it is one recording's alone, so nothing needs rewriting
+    and the file keeps its comments."""
+    text = ("# Plate 3, as loaded on the day.\n"
+            + yaml.safe_dump(valence_config(about=copy.deepcopy(SHARED),
+                                            tracking_rig="arena_max"), sort_keys=False))
+
+    source, target, _log = copy_into_new_replicate(qapp, tmp_path, monkeypatch,
+                                                   None, text=text)
+
+    assert target.read_bytes() == source.read_bytes()
+
+
+def test_t4_the_hub_says_what_of_the_section_stayed_behind(qapp, tmp_path, monkeypatch):
+    _source, _target, log = copy_into_new_replicate(
+        qapp, tmp_path, monkeypatch, valence_config(about=full_about()))
+    assert "about:" in log and "RepA" in log
+    assert "title" in log and "run:" in log
