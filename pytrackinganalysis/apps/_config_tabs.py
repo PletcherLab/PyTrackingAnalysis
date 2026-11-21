@@ -1857,15 +1857,15 @@ class AboutTab(QWidget):
         self._global_tab.factorsChanged.connect(self._on_factors_changed)
         self.load({})
 
-    # ------------------------------------------------------------------
-    # The factor and level rows
-    # ------------------------------------------------------------------
-
     def _on_title_changed(self, text: str) -> None:
         n = len(text.strip())
         self.title_count.setText(f"{n}/{about_mod.TITLE_LIMIT}" if n else "")
         self.title_count.setStyleSheet(
             "color: #d97706;" if n > about_mod.TITLE_LIMIT else "")
+
+    # ------------------------------------------------------------------
+    # The factor and level rows
+    # ------------------------------------------------------------------
 
     def _on_factors_changed(self, factors: dict[str, list[str]]) -> None:
         """Rebuild the rows when the Global tab's factors change, keeping
@@ -2153,16 +2153,26 @@ class AboutTab(QWidget):
         except Exception as err:  # noqa: BLE001 — said, never raised in a slot
             self.start_note.setText(f"Could not read {label}: {err}")
             return False
-        taken = self.start_from(about_mod.read_about(config))
+        earlier = about_mod.read_about(config)
+        taken = self.start_from(earlier)
         if not taken:
             self.start_note.setText(
                 f"{label} has nothing to start from: no about: section, or "
                 "none of what replicates share for the factors declared here.")
             return False
+        ## Only what this config declares is taken; say so when that left
+        ## something behind, or a factor not declared yet looks forgotten.
+        everything = about_mod.shared_about(earlier).get(about_mod.FACTORS_KEY)
+        declared = about_mod.shared_about(earlier, self._factors).get(
+            about_mod.FACTORS_KEY)
+        left_out = ("" if everything == declared else
+                    " What it says of factors or levels this config does not "
+                    "declare was left out: declare them on the Global tab "
+                    "first if they belong here.")
         self.start_note.setText(
-            f"Started from {label}: {', '.join(taken)}. The title, the "
-            "purpose and the notes are this recording's own and were left as "
-            "they are. Nothing is saved until you save.")
+            f"Started from {label}: {', '.join(taken)}.{left_out} The title, "
+            "the purpose and the notes are this recording's own and were left "
+            "as they are. Nothing is saved until you save.")
         return True
 
     def _choose_start_from(self) -> None:

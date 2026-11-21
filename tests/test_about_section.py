@@ -440,6 +440,44 @@ def test_a4_save_scripts_adds_no_section_to_a_config_without_one(tmp_path):
     assert KEY not in read_config(member)
 
 
+def test_a3_the_section_survives_every_writer_in_turn(
+        qapp, tmp_path, open_editor, script_dialogs):
+    """One config, every writer of it the package has, one after another:
+    the Config Editor, the Script Editor, the hypotheses the Project dialog
+    carries into replicates, and — reading it, never writing it — the
+    scaffolding of the next replicate."""
+    from pytrackinganalysis.script_editor.window import ScriptEditorWindow
+
+    root = tmp_path / "Study"
+    member = recording(root / "Rep1", about=full_about())
+    prj.create_project_file(str(root))
+    path = member / "tracking_config.yaml"
+
+    window = open_editor(member)
+    window._global_tab.facet_cutoffs.setText("3, 5")
+    window._save()
+    assert read_config(member)["global"]["facet_cutoffs"] == [3, 5]
+    assert read_config(member)[KEY] == FULL
+
+    scripts = ScriptEditorWindow(str(path))
+    try:
+        scripts._sections[0]["scripts"].append(copy.deepcopy(SCRIPT))
+        scripts._save()
+    finally:
+        scripts.close()
+    assert read_config(member)["scripts"] == [SCRIPT]
+    assert read_config(member)[KEY] == FULL
+
+    assert prj.write_replicate_hypotheses(str(root), ["Treated < Ctrl"]) == [str(path)]
+    assert read_config(member)["global"]["hypotheses"] == ["Treated < Ctrl"]
+    assert read_config(member)[KEY] == FULL
+
+    prj.Project(str(root)).scaffold_replicate("Rep2")
+    assert read_config(root / "Rep2")[KEY] == SHARED
+    assert read_config(member)[KEY] == FULL
+    assert spelled(read_config(member)[KEY]) == spelled(FULL)   # and in the same order
+
+
 def valence_config(about=None, **global_keys) -> dict:
     """A replicate config of a type that reads Directional Hypotheses."""
     config = {
@@ -1260,6 +1298,7 @@ def test_a6_starting_from_an_earlier_recording_fills_the_shared_part_only(
         == {key: MINE[key] for key in ("run", "title", "purpose", "notes", "x_mine")}
     assert "x_lab" not in started                            # the earlier one's own
     assert "Rep1" in tab.start_note.text()
+    assert "left out" not in tab.start_note.text()           # everything it describes is declared here
     assert read_config(earlier)[KEY] == FULL                 # only ever read
     assert is_dirty(window)                                  # nothing is saved until Save
 
@@ -1306,6 +1345,9 @@ def test_a6_only_the_factors_and_levels_this_config_declares_are_taken(
         "kind": "genotype",
         "levels": {"Ctrl": FULL["factors"]["Genotype"]["levels"]["Ctrl"]}}}
     assert config_validation.config_warnings(window._dump_config()) == []
+    ## And the person is told, so a factor not yet declared is not a surprise.
+    assert "left out" in window._about_tab.start_note.text()
+    assert "Global tab" in window._about_tab.start_note.text()
 
 
 def test_a6_a_field_the_earlier_recording_lacks_keeps_this_recordings(
