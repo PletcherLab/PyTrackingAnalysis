@@ -200,14 +200,17 @@ def test_the_file_checker_reports_the_warning_too(tmp_path):
     assert "about.title" in warning
 
 
-@pytest.mark.parametrize("section", [
-    "just some text",
-    {"title": ["a", "list"], "sex": 5, "protocol": 3, "factors": ["Genotype"]},
-    {"title": "x" * 61,
-     "factors": {"Genotype": {"kind": "strain", "levels": {"Other": "some cross"}},
-                 "Sex": {"kind": "sex"}}},
-], ids=["not a mapping", "wrong types", "odd values"])
-def test_a8_an_odd_section_still_loads_and_runs(tmp_path, capsys, section):
+#: Sections holding several of those cases at once.
+WRONG_TYPES = {"title": ["a", "list"], "sex": 5, "protocol": 3, "factors": ["Genotype"]}
+ODD_VALUES = {"title": "x" * 61,
+              "factors": {"Genotype": {"kind": "strain",
+                                       "levels": {"Other": "some cross"}},
+                          "Sex": {"kind": "sex"}}}
+
+
+@pytest.mark.parametrize("section", ["just some text", WRONG_TYPES, ODD_VALUES],
+                         ids=["not a mapping", "wrong types", "odd values"])
+def test_a8_an_odd_section_still_loads_and_the_loader_says_so(tmp_path, capsys, section):
     member = recording(tmp_path / "M1", about=section)
     expected = config_validation.config_warnings(read_config(member))
     assert expected
@@ -215,10 +218,15 @@ def test_a8_an_odd_section_still_loads_and_runs(tmp_path, capsys, section):
     exp = Experiment(str(member))
     said = capsys.readouterr().out
     for warning in expected:
-        assert f"Warning: {warning}" in said                 # the loader says so
-    exp.run_analysis()
+        assert f"Warning: {warning}" in said
+    assert len(exp.arena.summarize()) == 2                   # and it computes as ever
+
+
+def test_a8_an_odd_section_still_runs(tmp_path):
+    member = recording(tmp_path / "M1", about={**WRONG_TYPES, "notes": {"a": 1}})
+    Experiment(str(member)).run_analysis()
     assert (member / "analysis" / "Synthetic_Summary.csv").is_file()
-    assert read_config(member)[KEY] == section               # and nothing rewrote it
+    assert read_config(member)[KEY] == {**WRONG_TYPES, "notes": {"a": 1}}   # nothing rewrote it
 
 
 # ---------------------------------------------------------------------------
@@ -700,24 +708,34 @@ def test_t5_the_warning_never_reaches_a_report_or_the_statistics(tmp_path):
     provider is sent. Nothing of ``about:`` goes there, so this one is kept
     apart."""
     from pytrackinganalysis.ai.payload import build_payload
+    from test_project import _exp_config, _make_project
 
-    first, second = marked_about(), marked_about()
-    second["factors"]["Genotype"]["levels"]["Treated"] = f"{MARK} another cross"
-    project = tracker_study(tmp_path / "Study", {"Rep1": first, "Rep2": second})
+    def config_for(name):
+        section = marked_about()
+        section["factors"] = {"genotype": {"kind": "genotype", "levels": {
+            "chr": f"{MARK} cross" if name == "Rep1" else f"{MARK} another cross",
+            "control": {"definition": f"{MARK} control", "term": f"{MARK}-TERM"}}}}
+        ## A criterion that differs too, so the other channel has a warning.
+        return {KEY: section, **_exp_config(min_movement=140 if name == "Rep1" else 100)}
+
+    root = tmp_path / "Study"
+    root.mkdir()
+    project = _make_project(root, config_for=config_for)     # saved analyses and all
 
     [warning] = project.about_warnings
-    assert MARK in warning
-    assert not any("about" in line for line in project.warnings)
+    assert MARK in warning and "Rep1" in warning and "Rep2" in warning
+    [other] = project.warnings
+    assert "min_movement" in other
 
-    assert project.run_all(make_reports=False, log=lambda _line: None) == []
     project.build_combined_analysis()
     report = "\n".join(strings_in(project.build_report_model()))
-    assert "Rep1" in report and "Genotype" in report         # the walk reads the report
+    statistics = written_text(root)
+    assert f"Note: {other}" in report                        # that channel is printed
+    assert f"Note: {other}" in statistics["Proj_Stats.txt"]
     assert MARK not in report
     assert MARK not in build_payload(project).text
-    for name, text in written_text(tmp_path / "Study").items():
+    for name, text in statistics.items():
         assert MARK not in text, name
-    assert "Study_Stats.txt" in written_text(tmp_path / "Study")
 
 
 def test_t5_the_hub_shows_it_with_the_projects_other_notes(qapp, tmp_path):
