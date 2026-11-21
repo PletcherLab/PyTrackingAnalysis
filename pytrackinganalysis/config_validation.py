@@ -12,7 +12,8 @@ it should call this rather than re-implementing the rules.
 
 :func:`config_warnings` is the other half: advice that never blocks a load or a
 save, because a typed experiment's problems are fatal (ADR-0001) and the thing
-being advised against still works — today, an absolute ``data_folder:``.
+being advised against still works — an absolute ``data_folder:``, or anything
+odd in ``about:``, which no analysis reads (ADR-0019).
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 import yaml
 
 from . import Parameters
+from . import about as about_mod
 
 #: Mirrors :data:`layout.DATA_FOLDER_KEY` (ADR-0018); not imported, because
 #: layout imports the project module and this one is imported by the loader.
@@ -282,13 +284,22 @@ def validate_config_file(path) -> list[str]:
 def config_warnings(config) -> list[str]:
     """Advice about *config* that never blocks a load or a save.
 
-    Today only ``data_folder:`` (ADR-0018): an absolute value works, but not
-    once the share is mounted under another letter or path, so a relative one
-    is portable and an absolute one is warned about. A backslash is a
-    separator on Windows only; forward slashes work everywhere.
+    ``data_folder:`` (ADR-0018): an absolute value works, but not once the
+    share is mounted under another letter or path, so a relative one is
+    portable and an absolute one is warned about. A backslash is a separator
+    on Windows only; forward slashes work everywhere.
+
+    ``about:`` (ADR-0019): a field of the wrong type, an unknown factor kind,
+    a title too long for one line of a list, a factor or level this config's
+    own ``experimental_design_factors`` does not declare. The section is
+    never read for an analysis, so nothing in it can be more than advice.
     """
     if not isinstance(config, dict):
         return []
+    return _data_folder_warnings(config) + _about_warnings(config)
+
+
+def _data_folder_warnings(config: dict) -> list[str]:
     value = config.get(DATA_FOLDER_KEY)
     if not isinstance(value, str) or not value.strip():
         return []
@@ -303,6 +314,17 @@ def config_warnings(config) -> list[str]:
             f"{DATA_FOLDER_KEY}: {value} contains backslashes. Write forward "
             "slashes — a backslash is a folder separator on Windows only.")
     return warnings
+
+
+def _about_warnings(config: dict) -> list[str]:
+    section = config.get(about_mod.ABOUT_KEY)
+    if section is None:
+        return []
+    global_cfg = config.get('global')
+    factors = (global_cfg.get('experimental_design_factors')
+               if isinstance(global_cfg, dict) else None)
+    return [message for _where, message
+            in about_mod.about_problems(section, factors)]
 
 
 def config_file_warnings(path) -> list[str]:
