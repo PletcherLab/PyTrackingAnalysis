@@ -238,6 +238,60 @@ def test_a8_an_odd_section_still_runs(tmp_path):
     assert read_config(member)[KEY] == {**WRONG_TYPES, "notes": {"a": 1}}   # nothing rewrote it
 
 
+@pytest.mark.parametrize("levels", [5, True, 2.5, "Ctrl, Treated", None, {"a": 1}],
+                         ids=["a number", "a boolean", "a decimal", "text",
+                              "nothing", "a mapping"])
+def test_a8_a_design_written_oddly_never_lets_the_section_stop_a_load(tmp_path, levels):
+    """The mirrored module expects each factor's levels as a list. A design
+    that gives them some other way loads without an ``about:``, so it must
+    load with one."""
+    described = {"factors": {"Genotype": {"kind": "genotype",
+                                          "levels": {"Ctrl": "w1118"}}}}
+    for name, section in (("Plain", None), ("Described", described)):
+        member = recording(tmp_path / name / "Rep1", about=section)
+        config = read_config(member)
+        config["global"]["experimental_design_factors"] = {"Genotype": levels}
+        write_config(member, config)
+
+        assert isinstance(config_validation.config_warnings(read_config(member)), list)
+        Experiment(str(member))                              # it loads either way
+        started = prj.new_replicate_config(read_config(member))
+        assert started["global"] == read_config(member)["global"]
+
+
+def test_declared_factors_reads_levels_however_they_are_written():
+    declared = config_validation.declared_factors({"global": {
+        "experimental_design_factors": {"A": ["x", "y"], "B": ("x",), "C": None,
+                                        "D": "x, y", "E": 5}}})
+    assert declared == {"A": ["x", "y"], "B": ["x"], "C": [], "D": ["x, y"], "E": [5]}
+    for config in ({}, {"global": None}, {"global": {}}, None, "text",
+                   {"global": {"experimental_design_factors": ["A"]}}):
+        assert config_validation.declared_factors(config) == {}
+
+
+def test_a8_a_check_that_fails_is_itself_only_a_warning(tmp_path, monkeypatch, capsys):
+    """The checks are another package's module, copied. Whatever it does with
+    a section, an experiment and a Project still load, and say what happened."""
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("a bug in the copied module")
+
+    project = tracker_study(tmp_path / "Study", {"Rep1": full_about(),
+                                                 "Rep2": full_about()})
+    monkeypatch.setattr(about_mod, "about_problems", broken)
+    monkeypatch.setattr(about_mod, "meaning_spread", broken)
+
+    [warning] = config_validation.config_warnings(valid_config(**{KEY: full_about()}))
+    assert "about:" in warning and "a bug in the copied module" in warning
+    assert config_validation.config_warnings(valid_config()) == []   # no key, no check
+    Experiment(str(tmp_path / "Study" / "Rep1"))
+    assert "a bug in the copied module" in capsys.readouterr().out
+
+    reloaded = prj.Project(str(project.project_directory))
+    [warning] = reloaded.about_warnings
+    assert "about:" in warning and "a bug in the copied module" in warning
+    assert reloaded.warnings == project.warnings
+
+
 # ---------------------------------------------------------------------------
 # A2: inert
 # ---------------------------------------------------------------------------

@@ -73,7 +73,11 @@ reads both.
   The loader, the Config Editor's save and Validate YAMLs already show that
   channel. `validate_config` is not touched: its problems are fatal for a
   typed experiment (ADR-0001) and block the editor's save, and nothing in
-  `about:` may stop a load, a save or a run.
+  `about:` may stop a load, a save or a run. That holds for the checks
+  themselves: the mirrored module takes each factor's levels as a list and
+  raises on a number, so callers here hand it the design through
+  `config_validation.declared_factors`, and a check that fails anyway is
+  reported as one more warning.
 
 - **Every writer of the config keeps what it does not edit.** That includes
   keys inside `about:` the package does not know, `run:`, and the keys of a
@@ -86,7 +90,8 @@ reads both.
     changes `global.hypotheses` and writes it back; `about:` survives by
     value.
   - *`Project.scaffold_replicate`* and the Hub's *Copy config from…* give a
-    new replicate the first one's **shared About** only (below).
+    new replicate only the **shared About** of the config it starts from
+    (below).
   - *`ConfigEditorWindow.scaffold_project`* builds a new config from an
     Experiment Type and has no source to take a section from.
   - *The Config Editor's save* is the one writer that edits it (next item).
@@ -187,12 +192,12 @@ Rejected:
 - `Project.about_warnings` is a second list. Code that shows a Project's
   warnings to a person shows both; code that prints them on a report or into
   statistics uses `Project.warnings` alone.
-- Every writer but the Script Editor goes through PyYAML, so comments are
-  still lost on a full rewrite and a `|` block comes back as a quoted scalar,
-  equal in value. That is unchanged.
-- The Config Editor's save can now ask a question it never asked. Other
-  writers of a replicate's config (the Project dialog carrying hypotheses, a
-  catalogue) and an open editor no longer overwrite each other unseen.
+- Every writer that rewrites the file whole goes through PyYAML, so comments
+  are still lost on a full rewrite and a `|` block comes back as a quoted
+  scalar, equal in value. That is unchanged.
+- The Config Editor's save can now ask a question it never asked. An open
+  editor no longer writes over what another writer of the file — the Project
+  dialog carrying hypotheses, a catalogue — put there in the meantime.
 - After a save, "untouched" means "as last saved": the file as it was before
   that save is not brought back by undoing an edit in the form.
 - An undeclared level kept by the About tab keeps drawing its warning until a

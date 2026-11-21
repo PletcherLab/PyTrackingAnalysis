@@ -1551,9 +1551,11 @@ class HubWindow(QMainWindow):
         ## comes along; its title, purpose, notes and run: are that
         ## recording's alone and stay behind (ADR-0019). A config with
         ## neither is still copied byte for byte, comments and all.
-        kept = prj.new_replicate_config(config)
-        described = kept.get(about_mod.ABOUT_KEY) != config.get(about_mod.ABOUT_KEY)
+        described = False
         try:
+            kept = prj.new_replicate_config(config)
+            described = (kept.get(about_mod.ABOUT_KEY)
+                         != config.get(about_mod.ABOUT_KEY))
             if inherited or described:
                 atomic_write_text(
                     str(target),

@@ -316,15 +316,35 @@ def _data_folder_warnings(config: dict) -> list[str]:
     return warnings
 
 
+def declared_factors(config) -> dict:
+    """*config*'s ``experimental_design_factors`` as ``{factor: [levels]}``,
+    however the file writes them: a list is its levels, nothing is no
+    levels, and anything else is one level.
+
+    What ``about:`` is checked against (ADR-0019). The mirrored module takes
+    each factor's levels as a list and raises on a number; a design written
+    that way loads without an ``about:``, so it has to load with one.
+    """
+    global_cfg = config.get('global') if isinstance(config, dict) else None
+    factors = (global_cfg.get('experimental_design_factors')
+               if isinstance(global_cfg, dict) else None)
+    if not isinstance(factors, dict):
+        return {}
+    return {name: (list(levels) if isinstance(levels, (list, tuple))
+                   else [] if levels is None else [levels])
+            for name, levels in factors.items()}
+
+
 def _about_warnings(config: dict) -> list[str]:
     section = config.get(about_mod.ABOUT_KEY)
     if section is None:
         return []
-    global_cfg = config.get('global')
-    factors = (global_cfg.get('experimental_design_factors')
-               if isinstance(global_cfg, dict) else None)
-    return [message for _where, message
-            in about_mod.about_problems(section, factors)]
+    try:
+        problems = about_mod.about_problems(section, declared_factors(config))
+    except Exception as err:  # noqa: BLE001 — nothing in about: may stop a load
+        return [f"{about_mod.ABOUT_KEY}: could not be checked "
+                f"({type(err).__name__}: {err})"]
+    return [message for _where, message in problems]
 
 
 def config_file_warnings(path) -> list[str]:

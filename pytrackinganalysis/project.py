@@ -239,15 +239,13 @@ def new_replicate_config(config: dict) -> dict:
     import copy
 
     from . import about as about_mod
-    from . import layout
+    from . import config_validation, layout
 
     config = copy.deepcopy(config)
     config.pop(layout.DATA_FOLDER_KEY, None)
     if about_mod.ABOUT_KEY in config:
-        global_cfg = config.get("global")
-        factors = (global_cfg.get("experimental_design_factors")
-                   if isinstance(global_cfg, dict) else None)
-        shared = about_mod.shared_about(config[about_mod.ABOUT_KEY], factors or {})
+        shared = about_mod.shared_about(
+            config[about_mod.ABOUT_KEY], config_validation.declared_factors(config))
         if shared:
             config[about_mod.ABOUT_KEY] = shared
         else:
@@ -380,12 +378,17 @@ class Project:
     def _about_spread(self) -> list[str]:
         from . import about as about_mod
 
-        abouts = {name: about_mod.read_about(self.configs[name])
-                  for name in self.experiment_names}
+        try:
+            lines = about_mod.meaning_spread(
+                {name: about_mod.read_about(self.configs[name])
+                 for name in self.experiment_names})
+        except Exception as err:  # noqa: BLE001 — nothing in about: may stop a load
+            return [f"{about_mod.ABOUT_KEY}: the replicates' descriptions could "
+                    f"not be compared ({type(err).__name__}: {err})"]
         ## The mirrored module speaks pyflic's language, where a replicate is
         ## a Member; here a Member is a Project of a Batch (CONTEXT.md).
         return [line.replace("about: members ", "about: replicates ", 1)
-                for line in about_mod.meaning_spread(abouts)]
+                for line in lines]
 
     def find_script(self, name: str) -> dict | None:
         for script in self.scripts:
