@@ -1332,3 +1332,235 @@ def test_a6_this_recordings_own_config_and_an_unreadable_one_are_refused(
     assert not tab.start_from_file(tmp_path / "Missing" / "tracking_config.yaml")
     assert "Could not read" in tab.start_note.text()
     assert window._dump_config()[KEY] == MINE
+
+
+# ---------------------------------------------------------------------------
+# A5: the file changed on disk while the editor had it open
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def disk_change(monkeypatch):
+    """Answer the editor's changed-on-disk question by clicking the button
+    whose label starts with ``choose`` — and record every time it is asked."""
+    from pytrackinganalysis.apps import config_editor as ce
+
+    asked: list[dict] = []
+    answer = {"choose": "Cancel"}
+
+    def _exec(box):
+        labels = [button.text().replace("&", "") for button in box.buttons()]
+        asked.append({"title": box.windowTitle(), "text": box.text(),
+                      "detail": box.informativeText(), "buttons": labels,
+                      "default": box.defaultButton().text().replace("&", "")})
+        for button in box.buttons():
+            if button.text().replace("&", "").startswith(answer["choose"]):
+                button.click()
+                return 0
+        raise AssertionError(f"no {answer['choose']!r} button among {labels}")
+
+    monkeypatch.setattr(ce.QMessageBox, "exec", _exec)
+    return type("DiskChange", (), {"asked": asked, "answer": answer})
+
+
+def edited_elsewhere(member) -> dict:
+    """Rewrite *member*'s section the way a catalogue does once the recording
+    is filed, and return it."""
+    set_about(member, full_about())
+    return full_about()
+
+
+def test_a5_a_file_changed_on_disk_is_never_overwritten_silently(
+        tmp_path, open_editor, dialogs, disk_change):
+    member = recording(tmp_path / "M1", about={"title": "As first typed"})
+    path = member / "tracking_config.yaml"
+    window = open_editor(member)
+    window._about_tab.purpose.setPlainText("Typed in this window.")
+
+    on_disk = edited_elsewhere(member)
+    written = path.read_bytes()
+    window._save()                                           # answered: Cancel
+
+    [question] = disk_change.asked
+    assert "tracking_config.yaml" in question["text"]
+    assert "changed on disk" in question["text"]
+    assert "Sections that differ: about." in question["detail"]   # an informed choice
+    assert sorted(question["buttons"]) == ["Cancel", "Overwrite", "Reload from disk"]
+    assert question["default"] == "Cancel"                   # Enter writes nothing
+    assert path.read_bytes() == written                      # nothing was written
+    assert read_config(member)[KEY] == on_disk
+    assert not dialogs["information"]                        # and nothing claims a save
+    assert window._about_tab.purpose.toPlainText() == "Typed in this window."
+
+    window._save()                                           # it asks again, every time
+    assert len(disk_change.asked) == 2 and path.read_bytes() == written
+
+
+def test_a5_reloading_shows_what_is_on_disk_and_writes_nothing(
+        tmp_path, open_editor, dialogs, disk_change):
+    member = recording(tmp_path / "M1", about={"title": "As first typed"})
+    path = member / "tracking_config.yaml"
+    window = open_editor(member)
+    window._about_tab.purpose.setPlainText("Typed in this window.")
+    edited_elsewhere(member)
+    written = path.read_bytes()
+
+    disk_change.answer["choose"] = "Reload"
+    window._save()
+
+    tab = window._about_tab
+    assert path.read_bytes() == written
+    assert tab.title.text() == FULL["title"] and tab.purpose.toPlainText() == FULL["purpose"]
+    assert tab.run_value.text() == FULL["run"]
+    assert not is_dirty(window) and not dialogs["information"]
+
+    tab.notes.setPlainText("Typed after the reload.")
+    window._save()                                           # now it is this window's turn
+    assert len(disk_change.asked) == 1
+    assert read_config(member)[KEY] == {**FULL, "notes": "Typed after the reload."}
+
+
+def test_a5_overwriting_is_the_persons_choice_and_is_asked_once(
+        tmp_path, open_editor, dialogs, disk_change):
+    member = recording(tmp_path / "M1", about={"title": "As first typed"})
+    window = open_editor(member)
+    window._about_tab.purpose.setPlainText("Typed in this window.")
+    edited_elsewhere(member)
+
+    disk_change.answer["choose"] = "Overwrite"
+    window._save()
+
+    mine = {"title": "As first typed", "purpose": "Typed in this window."}
+    assert read_config(member)[KEY] == mine
+    assert len(disk_change.asked) == 1 and len(dialogs["information"]) == 1
+
+    window._about_tab.notes.setPlainText("And then some.")
+    window._save()                                           # its own write is no change
+    assert len(disk_change.asked) == 1
+    assert read_config(member)[KEY] == {**mine, "notes": "And then some."}
+
+
+def test_a5_a_file_nobody_else_touched_is_saved_without_a_question(
+        tmp_path, open_editor, dialogs, disk_change):
+    member = recording(tmp_path / "M1", about=full_about())
+    window = open_editor(member)
+    for note in ("One.", "Two."):
+        window._about_tab.notes.setPlainText(note)
+        window._save()
+    assert disk_change.asked == []
+    assert read_config(member)[KEY]["notes"] == "Two." and len(dialogs["information"]) == 2
+
+
+def test_a5_any_other_section_changed_on_disk_asks_too(
+        tmp_path, open_editor, dialogs, disk_change):
+    """It is the file that is watched, not only the section: hypotheses
+    written from the Project dialog, or a comment added by hand."""
+    member = recording(tmp_path / "M1", about=full_about())
+    path = member / "tracking_config.yaml"
+    window = open_editor(member)
+
+    config = read_config(member)
+    config["global"]["facet_cutoffs"] = [1, 2]
+    write_config(member, config)
+    window._save()
+    assert "Sections that differ: global." in disk_change.asked[-1]["detail"]
+
+    disk_change.answer["choose"] = "Reload"
+    window._save()
+    path.write_text(path.read_text(encoding="utf-8") + "# a note to self\n",
+                    encoding="utf-8")
+    disk_change.answer["choose"] = "Cancel"
+    window._save()
+    assert "comments or layout" in disk_change.asked[-1]["detail"]
+    assert path.read_text(encoding="utf-8").endswith("# a note to self\n")
+
+
+def test_a5_a_file_that_is_gone_is_said_to_be_gone(
+        tmp_path, open_editor, dialogs, disk_change):
+    member = recording(tmp_path / "M1", about=full_about())
+    path = member / "tracking_config.yaml"
+    window = open_editor(member)
+    path.rename(member / "moved_away.yaml")
+
+    window._save()                                           # Cancel
+    [question] = disk_change.asked
+    assert "no longer on disk" in question["text"]
+    assert not any(label.startswith("Reload") for label in question["buttons"])
+    assert not path.exists()
+
+    disk_change.answer["choose"] = "Save"
+    window._save()
+    assert read_config(member)[KEY] == FULL
+
+
+def test_a5_a_file_that_appeared_since_the_editor_opened_is_a_change(
+        tmp_path, open_editor, dialogs, disk_change):
+    """Opened on a folder with no config yet; another program wrote one."""
+    folder = tmp_path / "Lone"
+    folder.mkdir()
+    window = open_editor(folder)
+    window._about_tab.title.setText("Typed before the file existed")
+    elsewhere = recording(tmp_path / "Elsewhere", about=full_about())
+    (folder / "tracking_config.yaml").write_bytes(
+        (elsewhere / "tracking_config.yaml").read_bytes())
+
+    window._save()                                           # Cancel
+    assert len(disk_change.asked) == 1
+    assert read_config(folder)[KEY] == FULL
+
+    disk_change.answer["choose"] = "Reload"
+    window._save()
+    assert window._about_tab.title.text() == FULL["title"]
+
+
+def test_a5_saving_as_a_new_file_asks_nothing(tmp_path, open_editor, dialogs,
+                                              disk_change):
+    member = recording(tmp_path / "M1", about=full_about())
+    window = open_editor(member)
+    window._write(tmp_path / "copy.yaml")
+    assert disk_change.asked == [] and (tmp_path / "copy.yaml").is_file()
+
+
+# ---- the Script Editor is this window's own child ---------------------------
+
+def script_editor_saved(window, member, scripts) -> None:
+    """What the Script Editor does on save: splice the scripts into the file
+    as it is now, then tell the window that opened it."""
+    from pytrackinganalysis.script_editor.runner import save_scripts
+
+    path = member / "tracking_config.yaml"
+    save_scripts(path, scripts)
+    window._reload_external_changes(str(path))
+
+
+def test_a5_the_script_editors_own_save_is_not_a_change_to_ask_about(
+        tmp_path, open_editor, dialogs, disk_change):
+    member = recording(tmp_path / "M1", about=full_about())
+    window = open_editor(member)
+    window._about_tab.notes.setPlainText("Typed in this window.")
+
+    script_editor_saved(window, member, [copy.deepcopy(SCRIPT)])
+    window._save()
+
+    assert disk_change.asked == []
+    saved = read_config(member)
+    assert saved["scripts"] == [SCRIPT]
+    assert saved[KEY] == {**FULL, "notes": "Typed in this window."}
+
+
+def test_a5_a_rewrite_hidden_behind_the_script_editors_save_still_asks(
+        tmp_path, open_editor, dialogs, disk_change):
+    """The section is rewritten on disk, then the Script Editor saves over
+    that file. The Script Editor keeps the new section (A4), and this window
+    must still not write its stale one over it unasked."""
+    member = recording(tmp_path / "M1", about={"title": "As first typed"})
+    window = open_editor(member)
+    window._about_tab.purpose.setPlainText("Typed in this window.")
+
+    on_disk = edited_elsewhere(member)
+    script_editor_saved(window, member, [copy.deepcopy(SCRIPT)])
+    assert read_config(member)[KEY] == on_disk               # the child kept it
+    window._save()                                           # Cancel
+
+    assert len(disk_change.asked) == 1
+    assert read_config(member)[KEY] == on_disk
+    assert read_config(member)["scripts"] == [SCRIPT]

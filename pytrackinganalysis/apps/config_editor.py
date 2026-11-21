@@ -81,6 +81,12 @@ class ConfigEditorWindow(QMainWindow):
         # A single non-modal Script Editor. Two of them would both hold a
         # snapshot of the same file and the last one to save would win.
         self._script_editor: Optional[QMainWindow] = None
+        # Each file's text as this window last read or wrote it (None: there
+        # was no file). Another program may write the config while it is
+        # open here — a catalogue rewrites about: once the recording is
+        # filed — so a save compares the file with this first and never
+        # overwrites a change silently (ADR-0019).
+        self._file_as_read: dict[str, Optional[str]] = {}
 
         self._build_ui()
 
@@ -96,6 +102,7 @@ class ConfigEditorWindow(QMainWindow):
             # cwd/package fallback below would silently open an unrelated
             # config — and then save the user's edits over that file.
             self._current_path = candidate
+            self._remember_as_read(candidate, None)
             self._about_tab.set_location(candidate)
             self._set_title(candidate)
             return
@@ -330,6 +337,7 @@ class ConfigEditorWindow(QMainWindow):
             else:
                 self._tracking_tab.merge_region_names(self._tracking_tab.data_region_names())
         self._current_path = path
+        self._remember_as_read(path, text)
         self._disk_text = yaml.safe_dump(config, default_flow_style=False, sort_keys=False)
         self._set_title(path)
         self._refresh_dirty()
@@ -439,7 +447,8 @@ class ConfigEditorWindow(QMainWindow):
         self._tracking_tab.set_region_names(expected, self._plate(t, rig))
         self._tabs.setCurrentWidget(self._tracking_tab)
 
-    def _write(self, path: Path) -> None:
+    def _write(self, path: Path) -> bool:
+        """Write the config to *path*; True when it was written."""
         errors = self._global_tab.validation_errors()
         if errors:
             # Writing anyway would drop the offending fields from the file and
@@ -449,7 +458,7 @@ class ConfigEditorWindow(QMainWindow):
                 "Fix these fields first",
                 "The config was not saved:\n\n  • " + "\n  • ".join(errors),
             )
-            return
+            return False
 
         config = self._dump_config()
 
@@ -465,7 +474,9 @@ class ConfigEditorWindow(QMainWindow):
                     "The config was not saved — a typed experiment must be valid "
                     "to load:\n\n  • " + "\n  • ".join(problems),
                 )
-                return
+                return False
+        if not self._settle_change_on_disk(path):
+            return False
         try:
             # Atomic: the config is the project's only definition of the
             # experiment, and a plain open(path, "w") truncates it before the
@@ -479,15 +490,136 @@ class ConfigEditorWindow(QMainWindow):
             )
         except Exception as err:  # noqa: BLE001
             QMessageBox.critical(self, "Error", f"Could not save file:\n{err}")
-            return
+            return False
+        self._remember_as_read(path, self._text_on_disk(path))
         self._disk_text = yaml.safe_dump(config, default_flow_style=False, sort_keys=False)
         self._refresh_dirty()
         message = f"Config saved to:\n{path}"
-        ## Advice, never a refusal (an absolute data_folder: still works).
+        ## Advice, never a refusal (an absolute data_folder: still works, and
+        ## nothing in about: is ever more than a note).
         notes = config_validation.config_warnings(config)
         if notes:
             message += "\n\nNote:\n  • " + "\n  • ".join(notes)
         QMessageBox.information(self, "Saved", message)
+        return True
+
+    # ==================================================================
+    # Changed on disk
+    # ==================================================================
+
+    #: The text of a file that is there but cannot be read: equal to nothing
+    #: this window ever read, so it always counts as a change.
+    _UNREADABLE = object()
+
+    @staticmethod
+    def _file_key(path) -> str:
+        """One name per file, however it was reached."""
+        return os.path.normcase(os.path.realpath(str(path)))
+
+    @classmethod
+    def _text_on_disk(cls, path):
+        """The file's text now, ``None`` when there is no such file."""
+        try:
+            with open(path, encoding="utf-8") as handle:
+                return handle.read()
+        except FileNotFoundError:
+            return None
+        except (OSError, UnicodeDecodeError):
+            return cls._UNREADABLE
+
+    def _remember_as_read(self, path, text) -> None:
+        """Note *text* as what *path* held when this window last read or
+        wrote it. A file that could not be read back is not watched: there
+        is nothing to compare the next save with."""
+        key = self._file_key(path)
+        if text is self._UNREADABLE:
+            self._file_as_read.pop(key, None)
+        else:
+            self._file_as_read[key] = text
+
+    def _settle_change_on_disk(self, path: Path) -> bool:
+        """True when the save to *path* may go ahead.
+
+        If the file is not as this window last read or wrote it, another
+        program has written it since, and the person decides: reload it,
+        which discards the edits here and writes nothing, or overwrite it. A
+        file this window never opened (Save as) is the file dialog's to ask
+        about.
+        """
+        key = self._file_key(path)
+        if key not in self._file_as_read:
+            return True
+        before, now = self._file_as_read[key], self._text_on_disk(path)
+        if now == before:
+            return True
+        choice = self._ask_changed_on_disk(path, before, now)
+        if choice == "reload":
+            self._load_path(path)
+        return choice == "overwrite"
+
+    def _ask_changed_on_disk(self, path: Path, before, now) -> str:
+        """Ask what to do about *path* having changed on disk:
+        ``"reload"``, ``"overwrite"`` or ``"cancel"``."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        reload_button = None
+        if now is None:
+            box.setWindowTitle("The file is gone")
+            box.setText(f"{path.name} is no longer on disk.")
+            box.setInformativeText(
+                "It was there when this window read it, and has since been "
+                "moved, renamed or deleted.\n\nSaving writes it again, here, "
+                "with what this window shows.")
+            overwrite_button = box.addButton(
+                "Save it again", QMessageBox.ButtonRole.AcceptRole)
+        else:
+            box.setWindowTitle("The file changed on disk")
+            box.setText(f"{path.name} has changed on disk since this window "
+                        "read it.")
+            box.setInformativeText(
+                "Another program or window wrote it: a catalogue that files "
+                "the recording rewrites its description, for one.\n\n"
+                + self._what_differs(before, now)
+                + "\n\nReload it to see what it holds now: the edits in this "
+                "window are lost and nothing is written. Or overwrite it with "
+                "what this window shows.")
+            reload_button = box.addButton(
+                "Reload from disk", QMessageBox.ButtonRole.ActionRole)
+            overwrite_button = box.addButton(
+                "Overwrite", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_button = box.addButton(QMessageBox.StandardButton.Cancel)
+        ## Enter and Esc both write nothing.
+        box.setDefaultButton(cancel_button)
+        box.setEscapeButton(cancel_button)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is overwrite_button:
+            return "overwrite"
+        if reload_button is not None and clicked is reload_button:
+            return "reload"
+        return "cancel"
+
+    @classmethod
+    def _what_differs(cls, before, now) -> str:
+        """One sentence on how the file differs from what this window read,
+        for the person deciding."""
+        if now is cls._UNREADABLE:
+            return "It can no longer be read."
+        try:
+            old = yaml.safe_load(before) if isinstance(before, str) else None
+            new = yaml.safe_load(now)
+        except yaml.YAMLError:
+            return "It no longer reads as YAML."
+        if not isinstance(new, dict):
+            return "It no longer reads as a config."
+        old = old if isinstance(old, dict) else {}
+        missing = object()
+        differing = [str(key) for key in dict.fromkeys([*old, *new])
+                     if old.get(key, missing) != new.get(key, missing)]
+        if not differing:
+            return ("Its settings read the same as before: only comments or "
+                    "layout differ.")
+        return "Sections that differ: " + ", ".join(differing) + "."
 
     def _dump_config(self) -> dict:
         """The document to write: the loaded YAML with this editor's sections replaced.
@@ -672,6 +804,27 @@ class ConfigEditorWindow(QMainWindow):
         # The on-disk baseline moved, so re-anchor the dirty indicator to it.
         self._disk_text = yaml.safe_dump(fresh, default_flow_style=False, sort_keys=False)
         self._refresh_dirty()
+        self._accept_child_write(target, text, fresh)
+
+    def _accept_child_write(self, path, text: str, fresh: dict) -> None:
+        """The Script Editor just wrote *path*: this window's own child, not
+        a change to ask about at the next save — unless the sections this
+        window shows are no longer what it read. Then another program wrote
+        the file before the child did (the child starts from the file as it
+        is, so it kept that), and the next save must still say so."""
+        key = self._file_key(path)
+        if key not in self._file_as_read:
+            return
+        before = self._file_as_read[key]
+        try:
+            read = yaml.safe_load(before) if isinstance(before, str) else None
+        except yaml.YAMLError:
+            return
+        read = read if isinstance(read, dict) else {}
+        shown = (*self._OWNED_SECTIONS, config_validation.DATA_FOLDER_KEY)
+        missing = object()
+        if all(read.get(name, missing) == fresh.get(name, missing) for name in shown):
+            self._remember_as_read(path, text)
 
 
 # ---------------------------------------------------------------------------
