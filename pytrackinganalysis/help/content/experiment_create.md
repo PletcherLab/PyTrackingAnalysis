@@ -16,7 +16,7 @@ You can also **double-click a replicate row** to load it. A row marked **Config:
 
 The scaffolded `tracking_config.yaml` is design-conformant by construction, but it is a **starting point, not a finished config**:
 
-- When the Project already has at least one replicate, the scaffold is a copy of the **first replicate's** config - including its rig and its region treatments, which almost certainly are not the ones for this recording.
+- When the Project already has at least one replicate, the scaffold is a copy of the **first replicate's** config - including its rig and its region treatments, which almost certainly are not the ones for this recording. Two things are that recording's alone and stay behind: its `data_folder:`, and from its `about:` the title, the purpose, the notes and `run`. What replicates share of `about:` - who ran it, the series, the flies, the protocol, and what the factors and levels mean - comes along, so you do not type it twice.
 - When this is the first replicate, the config is built from `project.yaml`'s design and the experiment type's defaults, with the **rig left blank and no tracking regions yet** - they appear when you choose the rig in the Config Editor (or use **Generate N regions** for a Custom layout).
 
 Either way you still have to choose the rig, assign every tracking region to its design-factor levels, check the counting-region aliases, and put the DTrack export under `data/`. The exception is a design that admits only one treatment - every factor has a single level, such as `Genotype: [Chr]` - where the regions the Config Editor adds start assigned to it.
@@ -32,7 +32,7 @@ A copy is **checked against the project design before it is written**, using the
 
 What can happen:
 
-- **It conforms** - the file is copied over the scaffold and the replicate is ready; the editor is not forced open. If the copy is still incomplete (for example, region treatments that have not been assigned), the log lists what is left to fix rather than letting it fail at run time.
+- **It conforms** - the file is copied over the scaffold and the replicate is ready; the editor is not forced open. If the copy is still incomplete (for example, region treatments that have not been assigned), the log lists what is left to fix rather than letting it fail at run time. As with the scaffold, the chosen recording's `data_folder:` and the title, purpose, notes and `run` of its `about:` are left behind, and the log says so; a config with neither is copied byte for byte.
 - **It does not conform** - nothing is written. A message lists the mismatches (wrong experiment type, different factors or levels, counting regions out of order, or any enforced `design.global` key that disagrees), the original scaffold stays in place, and the Config Editor opens on it.
 - **It cannot be read, or you pick the replicate's own config, or you cancel** - nothing is written, you are told why, and the Config Editor opens on the scaffold.
 

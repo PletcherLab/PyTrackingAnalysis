@@ -344,7 +344,8 @@ serves every replicate without being copied into their configs.
 `tracking_regions` are required for every experiment; `counting_regions` is
 required for the two-choice and counter tracking types; `scripts` is optional.
 One optional top-level key, `data_folder`, reads the recording from a folder
-stored elsewhere instead of `data/` (§4.7).
+stored elsewhere instead of `data/` (§4.7).  One optional section, `about`,
+says what the recording is; no analysis reads it (§4.8).
 
 ### Creating a valid file
 
@@ -461,7 +462,8 @@ asks only for the directory name, because everything else is the Project's.
 The Hub then offers two ways to finish the scaffold: **Edit config…** opens it
 in the Config Editor, **Copy config from…** replaces it with the config of a
 replicate that already works (checked against the design before it is
-written). For Valence the Config Editor lays out the plate as soon as you pick
+written; another recording's `data_folder:`, and the title, purpose, notes
+and `run:` of its `about:`, are left behind). For Valence the Config Editor lays out the plate as soon as you pick
 the rig — 36 regions for Arena Max (with the first 18 X-flipped) or 24 for
 Colosseum, plus the Light/NoLight aliases. You then assign each region's
 treatment (already done for you when the design has only one — §4.2) and drop
@@ -852,7 +854,8 @@ managed/
   exports refuse for such an experiment (they write beside the recording).
 - **This config's alone.** Never under `global:`, never in the Project's
   `design:`; a replicate scaffolded from it, or a config copied from it with
-  **Copy config from…**, does not get the key.
+  **Copy config from…**, does not get the key.  (Of its `about:`, the new
+  replicate gets only the part replicates share — §4.8.)
 - **Conflicts block, they are not guessed.** The experiment is blocked —
   and loading it raises an error naming `data_folder`, the value as written
   and the path it resolved to — when the folder is missing, is a file, or
@@ -873,7 +876,97 @@ as **Data folder** on the Global tab. See `docs/adr/0018`.
 
 ---
 
-### 4.8 Complete minimal example
+### 4.8 `about` — what the recording is (optional)
+
+Whoever ran a recording knows things no file records: why it was run, who ran
+it, the flies' sex and age, the protocol, and what each design factor and
+level means.  A top-level `about:` section says so, in your own words, beside
+the design it describes:
+
+```yaml
+about:
+  title: Light preference, MBON10 silenced, replicate 1
+  purpose: Whether silencing MBON10 changes the preference for light.
+  experimenter: asmith
+  series: valence-mbon10-2026
+  organism: Drosophila melanogaster
+  sex: [female]
+  age_at_start: 5-7 days
+  protocol: {name: Valence two-choice, version: "2", link: https://example.org/valence}
+  notes: Plate 3 was reloaded before the start.
+  factors:
+    Genotype:
+      kind: genotype
+      levels:
+        MBON10: R12C11-GAL4 > UAS-GtACR1
+        Ctrl: w1118 > UAS-GtACR1
+global:
+  experimental_design_factors:
+    Genotype: [MBON10, Ctrl]
+  ...
+```
+
+| Field | What it holds |
+|-------|---------------|
+| `title` | One line.  Up to 60 characters fit a list of recordings; a longer one is saved and warned about. |
+| `purpose` | One or two sentences: what was varied, in which flies, and what was measured. |
+| `experimenter` | Who ran it, as you write it. |
+| `series` | A name shared by replicate recordings of the same question. |
+| `organism`, `age_at_start` | Text. |
+| `sex` | A list of words (`[female, male]`); one word is read as a list of one. |
+| `protocol` | `name`, `version`, `link`; plain text is read as the name. |
+| `notes` | Free text. |
+| `factors.<factor>.kind` | One of `genotype`, `treatment`, `diet`, `condition`, `sex`, `other`. |
+| `factors.<factor>.levels.<level>` | A few words on what the level is — the cross, the dose, the diet. |
+| `run` | The recording's id in a catalogue that filed it.  Written by the catalogue, never by you (below). |
+
+- **Every field is optional, and so is the section.**  A config without it
+  behaves exactly as before, and every file the pipeline writes for it is
+  byte-identical.
+- **No analysis reads it.**  No number, summary table or "re-run needed"
+  depends on it, none of it is printed on a report, and none of it is sent to
+  an AI provider.  Editing it never makes a saved analysis out of date.
+  `notes` here are not the **run notes** typed at Run Analysis, which *are*
+  printed on the report (§5.2); and a fly that died is still declared as a
+  removed region (§9), not noted here.
+- **Nothing in it is ever an error.**  A field of the wrong type, an unknown
+  `kind`, a title over 60 characters, a factor or level that
+  `experimental_design_factors` does not declare: each is a note from the
+  loader, the Config Editor's save and **Validate YAMLs**, and nothing more.
+- **This recording's alone.**  Never under `global:`, never in a Project's
+  `design:`, never inherited.  A Project only **notes** — in the Hub's Project
+  panel, in **Validate YAMLs** and in the `validate_design` step — when two
+  replicates describe one level differently, because the Combined Analysis
+  pools levels by name.  It is never an error and it is not printed on the
+  Project Report.
+- **A new replicate starts from an earlier one.**  Replicates share most of
+  their description: who ran it, the series, the flies, the protocol and what
+  the factors and levels mean.  **Create experiment…**, **Experiment
+  configs…** and **Copy config from…** carry that shared part into the new
+  replicate's config, and the About tab's **Start from another recording…**
+  does the same for a config you already have (§5.3).  The title, the
+  purpose, the notes and `run` describe one recording and are never carried.
+- **Another program may write here.**  A catalogue that files the recording
+  can rewrite the section to match its own record: it adds `run:`, and it may
+  turn a level's text into a mapping that keeps your words as `definition:`
+  beside its own `term:`, `label:` and `role:`.  The apps show `run:`, keep
+  every key they do not know, and change only a level's `definition`.  Because
+  such a rewrite can happen while the Config Editor has the file open, the
+  editor checks the file before it saves (§5.3).
+- **A recording can be described before any Project exists.**
+  `pytrack-config /path/to/MyRecording` opens the Config Editor on a folder
+  that has no `tracking_config.yaml` yet and writes one when you save.  It
+  reads no data and creates nothing else in the folder.
+
+The Config Editor's **About** tab edits the section.  A section it writes is
+in the order of the example above (`run` first, when there is one), with any
+key it does not know after `factors`.  A section you did not edit there keeps
+the values and the order the file had, so opening a config never makes it
+look changed.  See `docs/adr/0019`.
+
+---
+
+### 4.9 Complete minimal example
 
 ```yaml
 global:
@@ -919,6 +1012,7 @@ pytrack-hub /path/to/MyProject           # Hub, pre-loaded Project
 
 pytrack-config                           # Config Editor (opens last-used or ./tracking_config.yaml)
 pytrack-config /path/to/MyExperiment     # Config Editor, pre-loaded tracking_config.yaml
+pytrack-config /path/to/MyRecording      # ...or a folder with no config yet: describe it, save (§4.8)
 
 pytrack-qc /path/to/MyExperiment         # QC Viewer, pre-loaded experiment
 
@@ -1121,7 +1215,7 @@ matplotlib's cache is now cleared automatically every time the Hub closes.
 
 ### 5.3 Config Editor (`pytrack-config`)
 
-Structured editor for `tracking_config.yaml` with three tabs wrapped in a Card:
+Structured editor for `tracking_config.yaml` with four tabs wrapped in a Card:
 
 - **Global** — drop-downs for `tracking_type` and `tracking_rig`; a table for
   experimental-design factors; optional facet cutoffs; the type's quality
@@ -1137,9 +1231,35 @@ Structured editor for `tracking_config.yaml` with three tabs wrapped in a Card:
   start blank, or already assigned when the design admits only one
   treatment (§4.2).
 - **Counting regions** — treatment label → DTrack aliases.
+- **About** — what the recording is (`about:`, §4.8): title (with a count
+  against the 60 characters that fit a list), purpose, experimenter, series,
+  organism, sex, age at start, protocol and notes.  `run` is shown when the
+  file has one and cannot be typed.  Below them, each design factor has a
+  **kind** and each declared level a row for **what it means**; the rows
+  follow the factors on the Global tab, and what you typed is kept while the
+  factors change.  Rename a level there and its row here goes — its meaning
+  is no longer written — while the others stay; rename it back and it is as
+  it was.  A level the file describes but the design does not declare has no
+  row: it is kept as it is, and saving notes that it is undeclared.
+  **Start from another recording…** asks for another recording's
+  `tracking_config.yaml` and fills in what replicates share — experimenter,
+  series, organism, sex, age at start, protocol, and the kinds and meanings
+  of the factors and levels this config declares.  Your title, purpose and
+  notes are left as they are, and nothing is saved until you save.
 
 A **YAML preview** Card below the tabs renders the live serialization for
 trust / debugging; an amber `●` dirty indicator surfaces unsaved edits.
+
+**If the file changed on disk.**  Another program can write a config while
+the editor has it open — the Hub writing new Directional Hypotheses into a
+replicate, or a catalogue rewriting `about:` once the recording is filed.
+Before every save the editor compares the file with what it last read or
+wrote.  If it differs, the save stops and says so, naming the sections that
+differ (or that only comments or layout do), and you choose: **Reload from
+disk** shows what the file holds now — your unsaved edits are lost and
+nothing is written — **Overwrite** writes what the window shows, and
+**Cancel**, the default, does neither.  Saving scripts from the Script Editor
+opened in this window is not such a change.
 
 #### Visual Script Editor
 
@@ -1462,7 +1582,9 @@ project-level publication figures, and builds a Project Report.
   and levels, facets, quality criteria, counting-region names).  The design
   is seeded from the Experiment Type's defaults.  An empty Project is valid —
   add replicates with **Experiments → Create experiment…**, which scaffolds
-  each new `tracking_config.yaml` *from the design*.
+  each new `tracking_config.yaml` *from the design* — or, once the Project
+  has a replicate, from the first one, without that recording's
+  `data_folder:` and with only the shared part of its `about:` (§4.8).
 - **Existing replicates / retired batch-over-experiments parent** — run
   **Initialize existing directory…** on the parent: it keeps its own name, its
   subdirectories become the replicates, the dialog infers the design from the

@@ -49,9 +49,10 @@ carries a stale name into output filenames.
 _Avoid_: batch parent, parent directory
 
 **Experiment Directory**:
-One recording's directory — `tracking_config.yaml`, `data/` (or a **Data
-Folder** its config names instead), `analysis/`, `qc/`, its own report —
-either standalone or as a replicate inside a Project.
+One recording's directory — `tracking_config.yaml` (its design, and
+optionally an **About**), `data/` (or a **Data Folder** its config names
+instead), `analysis/`, `qc/`, its own report — either standalone or as a
+replicate inside a Project.
 (Formerly called the "project directory".)
 
 **Data Folder**:
@@ -72,6 +73,30 @@ two replicates of one Project reading the same folder are one, and the later
 in name order is reported as a **duplicate** (ADR-0018).
 _Avoid_: data_dir (pyflic's retired key), linked data, external data, data
 root
+
+**About**:
+The optional top-level `about:` section of an Experiment Directory's
+`tracking_config.yaml`: what the recording is, in the person's own words — a
+title, the purpose, who ran it, the series it belongs to, the flies (organism,
+sex, age at start), the protocol, notes, and for each design factor its kind
+and what each level means. Every field is optional, and **no analysis reads
+any of it**: no number, report, AI input or "re-run needed" depends on it, and
+anything odd in it is a warning, never an error. It belongs to that one
+recording — never under `global:`, never in a Project design, never
+inherited; a Project only notes when two replicates describe one level
+differently, because the Combined Analysis pools levels by name. Replicates
+share most of it, so a new one starts from an earlier one's **shared About**
+(experimenter, series, organism, sex, age at start, protocol, factors) — never
+its title, purpose, notes or `run:`. Another program may write here: a
+catalogue that files the recording adds `run:` (its id there — nothing to do
+with an analysis run or a Batch Run) and, inside a level's mapping, `term:`,
+`label:` and `role:`. The package shows or keeps those and never edits them.
+Filled in on the Config Editor's About tab, which is also how a recording is
+described before any Project exists (`pytrack-config <folder>`). The module
+that knows its shape is a verbatim copy of pyflic's (ADR-0019).
+_Avoid_: metadata, annotations (say description); run notes (those are
+`<name>_Notes.txt`, typed at Run Analysis and printed on the report —
+`about.notes` never is); README
 
 **Unfiled Recording**:
 An Experiment Directory whose DTrack export sits loose at its root instead of

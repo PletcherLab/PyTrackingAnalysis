@@ -23,6 +23,10 @@ The pipeline creates `analysis/` and `qc/` folders when it writes results.
 6. Load a replicate by **double-clicking its row** in the Project table. This is the Hub's only experiment-loading path, and it runs QC as the experiment loads.
 7. Run a single replicate from **Analyze -> Run Analysis**, or run the whole study from the Project panel with **Create report**. After the PDF exists, the same button reads **Update report**; both labels analyze every replicate, rebuild Combined Analysis, and write the Project report.
 
+## Describing a recording first
+
+A recording can be described before any Project exists. Run `pytrack-config /path/to/MyRecording` on its folder: the Config Editor opens even when there is no `tracking_config.yaml` yet, and its **About** tab holds a title, the purpose, who ran it, the flies, the protocol and what each factor and level means. Saving writes the config and nothing else. Every field is optional and no analysis reads any of it - see `about` under **Config file overview**. When the recording later becomes a replicate, its description comes with it, and the next replicate can start from it.
+
 Later, when several sibling Projects sit in one folder, the Hub's **Batch** tile can run them all unattended - pick the parent with the Batch panel's **Choose batch folder...** button; see the **Batch runs** help topic.
 
 ## Apps

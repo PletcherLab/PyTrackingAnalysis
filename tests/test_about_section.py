@@ -1628,3 +1628,14 @@ def test_a_folder_with_a_recording_and_no_config_can_be_described(
     assert saved[KEY]["factors"] == {"Genotype": {"levels": {"Ctrl": "w1118 > UAS-GtACR1"}}}
     assert saved["global"]["experimental_design_factors"] == FACTORS
     assert disk_change.asked == []
+
+
+def test_the_help_says_where_to_start_and_what_the_section_holds():
+    from pytrackinganalysis.help.render import load_topic_markdown
+
+    overview = load_topic_markdown("config_overview")
+    assert "`about`" in overview and "pytrack-config" in overview
+    for field in (*about_mod.KEY_ORDER, *about_mod.FACTOR_KINDS):
+        assert f"`{field}`" in overview, field
+    assert "Start from another recording" in overview
+    assert "about" in load_topic_markdown("getting_started")

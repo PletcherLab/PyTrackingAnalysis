@@ -54,6 +54,7 @@ Do not put a `tracking_config.yaml` at the Project root. Each replicate director
 - tracking-region treatment assignments
 - counting-region aliases from that DTrack export
 - replicate-local experiment scripts
+- what the recording is (`about:` - its title, purpose, who ran it, the flies, the protocol, and what each factor and level means). It is never part of the design and never compared for errors.
 
 ## Validation
 
@@ -69,6 +70,8 @@ Hard failures include:
 - different Directional Hypotheses (`hypotheses`) - compared as predictions, so `WT > Mutant` matches `Mutant < WT`, and a replicate predicting what the design does not is refused too. When **Edit config...** changes a Project's predictions, it offers to write them into every replicate.
 
 Region assignments, aliases, fly counts, and rigs may differ unless you explicitly enforce them in `design.global`.
+
+One difference is only ever a note: two replicates whose `about:` describes the same factor level differently. The Combined Analysis pools levels by name, so the Project panel, **Validate YAMLs** and the `validate_design` step say so. The Project still loads, and the note is not printed on its report.
 
 ## Creating replicate configs
 

@@ -15,7 +15,7 @@ Four PyQt6 desktop apps sharing a common theme, plus a full Python API:
 | Interface | Purpose |
 |-----------|---------|
 | **Analysis Hub** (`pytrack`) | Project-first driver — manage replicates, load experiments, run analyses, build combined results, view plots in a tabbed dock |
-| **Config Editor** (`pytrack-config`) | Structured editor for `tracking_config.yaml`, with a visual Script Editor for saved analysis recipes |
+| **Config Editor** (`pytrack-config`) | Structured editor for `tracking_config.yaml` — its settings and regions, and what the recording is — with a visual Script Editor for saved analysis recipes |
 | **QC Viewer** (`pytrack-qc`) | Per-tracker data-quality tables with XY, distance, and quality-timeline plots |
 | **Plot Editor** (`pytrack-plots`) | Project-level publication figures from pooled replicate data |
 | **Python API** | Everything scriptable from a notebook or script (`Experiment`, `batch_analyze`, …) |
@@ -71,6 +71,7 @@ uv run pytrack-install-desktop
 uv run pytrack                        # Analysis Hub
 uv run pytrack /path/to/MyProject     # Hub with a Project pre-loaded
 uv run pytrack-config                 # Config Editor
+uv run pytrack-config /path/to/MyRecording   # describe a recording, with or without a config yet
 uv run pytrack-qc /path/to/MyExperiment
 uv run pytrack-plots /path/to/MyProject   # Plot Editor (publication figures)
 ```
@@ -95,6 +96,36 @@ global:
 That folder is only ever read; `analysis/`, `qc/` and the report are still
 written in the replicate folder. Leave the key out and nothing changes. See the
 [user guide](doc/guide.md) §4.7 and `docs/adr/0018`.
+
+A recording can also say what it is. An optional top-level `about:` section
+holds, in your own words, a title, the purpose, who ran it, the flies, the
+protocol, and what each design factor and level means:
+
+```yaml
+about:
+  title: Light preference, MBON10 silenced, replicate 1
+  purpose: Whether silencing MBON10 changes the preference for light.
+  experimenter: asmith
+  sex: [female]
+  factors:
+    Genotype:
+      kind: genotype
+      levels:
+        MBON10: R12C11-GAL4 > UAS-GtACR1
+        Ctrl: w1118 > UAS-GtACR1
+global:
+  ...
+```
+
+Every field is optional and no analysis reads any of it: no number, report or
+AI summary depends on it, and anything odd in it is a note, never an error.
+Fill it in on the Config Editor's **About** tab — `pytrack-config
+/path/to/MyRecording` works on a folder that has no config yet, so a recording
+can be described before any Project exists. A new replicate starts from an
+earlier one's shared part (who ran it, the flies, the protocol, the factors),
+and every writer of the file keeps what it does not edit, including keys a
+catalogue adds. Leave the section out and nothing changes. See the
+[user guide](doc/guide.md) §4.8 and `docs/adr/0019`.
 
 ### Python
 
