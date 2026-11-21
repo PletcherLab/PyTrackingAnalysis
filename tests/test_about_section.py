@@ -13,12 +13,14 @@ T1, the mirrored module itself, is ``test_about_mirror.py`` and
 from __future__ import annotations
 
 import copy
+import dataclasses
 
 import pytest
 import yaml
 
 from pytrackinganalysis import about as about_mod
 from pytrackinganalysis import config_validation
+from pytrackinganalysis import project as prj
 from pytrackinganalysis.Experiment import Experiment
 
 from test_experiment_integration import write_project
@@ -78,6 +80,35 @@ def recording(root, about=None, **kwargs):
 def read_config(directory) -> dict:
     with open(directory / "tracking_config.yaml", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
+
+
+def write_config(directory, config) -> None:
+    (directory / "tracking_config.yaml").write_text(
+        yaml.safe_dump(config, sort_keys=False, allow_unicode=True),
+        encoding="utf-8")
+
+
+def set_about(directory, about) -> None:
+    """Rewrite the config on disk with *about* as its section (none when
+    ``None``), as another program would: nothing else changes."""
+    config = read_config(directory)
+    config.pop(KEY, None)
+    if about is not None:
+        config[KEY] = copy.deepcopy(about)
+    write_config(directory, config)
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        try:
+            app = QApplication([])
+        except Exception as err:  # noqa: BLE001
+            pytest.skip(f"Qt is unavailable: {err}")
+    return app
 
 
 def valid_config(**top) -> dict:
@@ -188,3 +219,272 @@ def test_a8_an_odd_section_still_loads_and_runs(tmp_path, capsys, section):
     exp.run_analysis()
     assert (member / "analysis" / "Synthetic_Summary.csv").is_file()
     assert read_config(member)[KEY] == section               # and nothing rewrote it
+
+
+# ---------------------------------------------------------------------------
+# A2: inert
+# ---------------------------------------------------------------------------
+
+def analysis_outputs(member) -> dict:
+    """Every table and text file a run writes for *member*, by name."""
+    return {path.name: path.read_bytes()
+            for folder in ("analysis", "qc")
+            for path in sorted((member / folder).iterdir())
+            if path.suffix in (".csv", ".txt")}
+
+
+def test_a2_the_section_changes_no_number_and_no_verdict(tmp_path):
+    study = tmp_path / "Study"
+    member = recording(study / "Rep1")
+    prj.create_project_file(str(study))
+
+    edited = full_about()
+    edited["title"] = "Another title altogether"
+    edited["run"] = "R-20261122-test-07"
+    edited["factors"]["Genotype"]["levels"]["Ctrl"]["definition"] = "Canton-S"
+    edited["factors"]["Genotype"]["levels"]["Treated"] = "something else"
+
+    outputs = {}
+    for label, section in (("none", None), ("full", full_about()), ("edited", edited)):
+        set_about(member, section)
+        Experiment(str(member)).run_analysis()
+        outputs[label] = analysis_outputs(member)
+        status = prj.Project(str(study)).experiment_status("Rep1")
+        assert status["analyzed"] and not status["stale"], label
+
+    assert {"Synthetic_Summary.csv", "Synthetic_Summary_Facet.csv",
+            "Synthetic_data_quality.csv", "Synthetic_Stats.txt"} <= set(outputs["none"])
+    assert outputs["full"] == outputs["none"]
+    assert outputs["edited"] == outputs["none"]
+
+    ## Edited again with no run in between: the saved analysis still stands.
+    set_about(member, {"title": "Edited after the analysis", "notes": "And notes."})
+    project = prj.Project(str(study))
+    assert not project.experiment_status("Rep1")["stale"]
+    assert "re-run needed" not in prj.format_excluded_cell(
+        project.experiment_status("Rep1"))
+    logged: list[str] = []
+    assert project.run_all(skip_analyzed=True, log=logged.append) == []
+    assert logged == ["[Rep1] already analyzed — skipped"]
+    assert analysis_outputs(member) == outputs["none"]
+
+
+# ---------------------------------------------------------------------------
+# T7: nothing of the section on a report, or in what an AI provider is sent
+# ---------------------------------------------------------------------------
+
+#: In every free-text value of :func:`marked_about`, and nowhere else.
+MARK = "Qz7"
+
+
+def marked_about() -> dict:
+    return {
+        "run": f"R-{MARK}-run",
+        "title": f"{MARK} title",
+        "purpose": f"{MARK} purpose",
+        "experimenter": f"{MARK}person",
+        "series": f"{MARK}-series",
+        "organism": f"{MARK} organism",
+        "sex": [f"{MARK}sex"],
+        "age_at_start": f"{MARK} days",
+        "protocol": {"name": f"{MARK} protocol", "version": f"{MARK}v",
+                     "link": f"https://example.org/{MARK}"},
+        "notes": f"{MARK} notes",
+        "factors": {"Genotype": {"kind": "genotype", "levels": {
+            "Treated": f"{MARK} cross",
+            "Ctrl": {"definition": f"{MARK} control", "term": f"{MARK}-TERM",
+                     "label": f"{MARK} label", "role": f"{MARK} role"}}}},
+        "x_lab": {"a": f"{MARK} unknown"},
+    }
+
+
+def strings_in(value):
+    """Every string a report model holds: block fields, cells, labels."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, (bytes, bytearray)):
+        return
+    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+        for field in dataclasses.fields(value):
+            yield from strings_in(getattr(value, field.name))
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from strings_in(key)
+            yield from strings_in(item)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from strings_in(item)
+
+
+def written_text(directory) -> dict:
+    """The text of every table, note and manifest under *directory*'s
+    ``analysis/`` and ``qc/``."""
+    return {path.name: path.read_text(encoding="utf-8", errors="replace")
+            for folder in ("analysis", "qc")
+            for path in sorted((directory / folder).iterdir())
+            if path.suffix in (".csv", ".txt", ".json", ".md")}
+
+
+def test_t7_a_report_holds_none_of_the_sections_text(tmp_path):
+    from pytrackinganalysis.ai.payload import build_payload
+
+    member = recording(tmp_path / "Marked", about=marked_about())
+    exp = Experiment(str(member))
+    exp.run_analysis()
+
+    report = "\n".join(strings_in(exp.build_report_model()))
+    assert "Marked" in report and "Genotype" in report      # the walk reads the report
+    assert MARK not in report
+
+    payload = build_payload(exp)
+    assert "Synthetic_Summary.csv" in payload.text           # report and tables both
+    assert MARK not in payload.text
+
+    assert MARK not in str(exp)                              # what the Hub logs on load
+    for name, text in written_text(member).items():
+        assert MARK not in text, name
+    assert exp.create_report().endswith("Marked_report.pdf")
+
+
+# ---------------------------------------------------------------------------
+# A3 / A4: the writers that do not edit the section
+# ---------------------------------------------------------------------------
+
+SCRIPT = {"name": "nightly",
+          "steps": [{"action": "load_experiment", "params": {"path": "."}},
+                    {"action": "run_qc", "params": {}}]}
+
+
+@pytest.fixture
+def script_dialogs(monkeypatch):
+    """Capture the Script Editor's modal dialogs: they would block a headless run."""
+    from pytrackinganalysis.script_editor import window as win
+
+    seen = {"information": [], "warning": [], "critical": []}
+    for kind in seen:
+        monkeypatch.setattr(
+            win.QMessageBox, kind,
+            lambda *args, _kind=kind, **kwargs: seen[_kind].append(args))
+    return seen
+
+
+def about_block(directory) -> str:
+    """The ``about:`` block of the config as the file spells it."""
+    lines = (directory / "tracking_config.yaml").read_text(encoding="utf-8").splitlines()
+    start = lines.index(f"{KEY}:")
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i] and not lines[i][0].isspace()), len(lines))
+    return "\n".join(lines[start:end])
+
+
+def test_a3_the_script_editor_keeps_the_section_to_the_letter(
+        qapp, tmp_path, script_dialogs):
+    from pytrackinganalysis.script_editor.runner import load_scripts
+    from pytrackinganalysis.script_editor.window import ScriptEditorWindow
+
+    member = recording(tmp_path / "M1", about=full_about())
+    spelled = about_block(member)
+    window = ScriptEditorWindow(str(member / "tracking_config.yaml"))
+    try:
+        window._sections[0]["scripts"].append(copy.deepcopy(SCRIPT))
+        window._save()
+    finally:
+        window.close()
+
+    assert script_dialogs["information"] and not script_dialogs["critical"]
+    assert load_scripts(member / "tracking_config.yaml") == [SCRIPT]
+    assert read_config(member)[KEY] == FULL
+    assert about_block(member) == spelled                    # spliced around, not rewritten
+
+
+def test_a4_the_script_editor_writes_back_the_section_now_on_disk(
+        qapp, tmp_path, script_dialogs):
+    """A catalogue may rewrite the section while the window is open."""
+    from pytrackinganalysis.script_editor.window import ScriptEditorWindow
+
+    member = recording(tmp_path / "M1", about={"title": "As first typed"})
+    window = ScriptEditorWindow(str(member / "tracking_config.yaml"))
+    try:
+        set_about(member, full_about())                      # changed on disk meanwhile
+        window._sections[0]["scripts"].append(copy.deepcopy(SCRIPT))
+        window._save()
+    finally:
+        window.close()
+
+    assert read_config(member)[KEY] == FULL
+    assert read_config(member)["scripts"] == [SCRIPT]
+
+
+def test_a4_save_scripts_adds_no_section_to_a_config_without_one(tmp_path):
+    from pytrackinganalysis.script_editor.runner import save_scripts
+
+    member = recording(tmp_path / "M1")
+    save_scripts(member / "tracking_config.yaml", [copy.deepcopy(SCRIPT)])
+    assert KEY not in read_config(member)
+
+
+def valence_config(about=None, **global_keys) -> dict:
+    """A replicate config of a type that reads Directional Hypotheses."""
+    config = {
+        "global": {"experiment_type": "Valence", "tracking_rig": "colosseum",
+                   "facet_cutoffs": [10, 70],
+                   "experimental_design_factors": copy.deepcopy(FACTORS),
+                   **global_keys},
+        "counting_regions": {"Light": {"alias": "L"}, "NoLight": {"alias": "N"}},
+        "tracking_regions": {"T_0": {"experimental_factors": "Ctrl"}},
+    }
+    if about is not None:
+        config = {KEY: copy.deepcopy(about), **config}
+    return config
+
+
+def test_a3_writing_hypotheses_into_replicates_keeps_the_section(tmp_path):
+    for name in ("Rep1", "Rep2"):
+        (tmp_path / name).mkdir()
+        write_config(tmp_path / name, valence_config(about=full_about()))
+    (tmp_path / "Plain").mkdir()
+    write_config(tmp_path / "Plain", valence_config())
+
+    changed = prj.write_replicate_hypotheses(str(tmp_path), ["Treated < Ctrl"])
+
+    assert len(changed) == 3
+    for name in ("Rep1", "Rep2"):
+        config = read_config(tmp_path / name)
+        assert config["global"]["hypotheses"] == ["Treated < Ctrl"]
+        assert config[KEY] == FULL
+        assert list(config)[0] == KEY                        # where it was
+    assert KEY not in read_config(tmp_path / "Plain")
+
+
+def test_a4_the_project_dialog_writes_back_the_section_now_on_disk(
+        qapp, tmp_path, monkeypatch):
+    """The Project dialog carries new predictions into its replicates. What
+    it writes there starts from each file as it is at that moment."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from pytrackinganalysis.apps.hub import ProjectInfoDialog
+
+    design = {"global": {"experiment_type": "Valence", "facet_cutoffs": [10, 70],
+                         "experimental_design_factors": copy.deepcopy(FACTORS)},
+              "counting_regions": ["Light", "NoLight"]}
+    prj.create_project_file(str(tmp_path), "P", design=design)
+    for name in ("Rep1", "Rep2"):
+        (tmp_path / name).mkdir()
+        write_config(tmp_path / name, valence_config(about={"title": "As first typed"}))
+
+    dialog = ProjectInfoDialog(None, start_dir=str(tmp_path))
+    try:
+        dialog._prefill_from_dir()
+        set_about(tmp_path / "Rep1", full_about())           # changed on disk meanwhile
+        dialog.hypotheses_edit.add_row("Treated < Ctrl", "Experiment")
+        monkeypatch.setattr(QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.StandardButton.Yes)
+        dialog._save()
+    finally:
+        dialog.close()
+
+    predicted = [{"expect": "Treated < Ctrl", "phases": ["Experiment"]}]
+    assert read_config(tmp_path / "Rep1")["global"]["hypotheses"] == predicted
+    assert read_config(tmp_path / "Rep1")[KEY] == FULL
+    assert read_config(tmp_path / "Rep2")[KEY] == {"title": "As first typed"}
+    prj.Project(str(tmp_path))                               # and it still loads
