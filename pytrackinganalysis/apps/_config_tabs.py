@@ -4,21 +4,35 @@ Ported verbatim from ``config_ui.py`` so the visual layout matches the
 legacy editor.  The wrapping :class:`~pytrackinganalysis.apps.config_editor.ConfigEditorWindow`
 is responsible for the surrounding pyflic-style chrome (TopBar, Cards,
 YAML preview, Script Editor launcher).
+
+:class:`AboutTab` is the newcomer: the optional ``about:`` section, which
+describes the recording and is never read for an analysis (ADR-0019).
 """
 
 from __future__ import annotations
 
+import copy
+import os
+from collections.abc import Mapping
+from pathlib import Path
+
+import yaml
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QTableWidget,
@@ -28,6 +42,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .. import Parameters as _ParametersMod
+from .. import about as about_mod
 from .. import experiment_types as _et
 from ..help import HelpButton
 from ._hypotheses import HypothesesEditor
@@ -1609,3 +1624,548 @@ class CountingRegionsTab(QWidget):
                 regions[label] = entry
         # Always emit the key — see TrackingRegionsTab.dump.
         return {"counting_regions": regions}
+
+
+#: A config with no ``about:`` key at all, as opposed to one whose key is empty.
+_NO_ABOUT = object()
+
+#: What the About tab is for (ADR-0019).
+ABOUT_INTRO = (
+    "What this recording is, in your own words. Every field is optional and "
+    "is saved under about: in this file. Nothing here is used by an analysis "
+    "or printed on a report: it is for whoever reads this config later.")
+START_FROM_TOOLTIP = (
+    "Fill in what replicate recordings share from another recording's "
+    "tracking_config.yaml: who ran it, the series, the flies, the protocol, "
+    "and the kind and meaning of each factor and level this config declares.\n"
+    "The title, the purpose and the notes are this recording's own and are "
+    "left as they are. Nothing is saved until you save.")
+RUN_TOOLTIP = (
+    "run: is this recording's id in the catalogue that filed it. The "
+    "catalogue writes it; it is shown here and cannot be typed.")
+
+
+def _fit_rows(table: QTableWidget, least: int = 1) -> None:
+    """Make *table* exactly as tall as its rows (at least *least* of them),
+    so it never scrolls inside the page that already does."""
+    rows = sum(table.rowHeight(r) for r in range(table.rowCount()))
+    spare = max(least - table.rowCount(), 0) * table.verticalHeader().defaultSectionSize()
+    table.setFixedHeight(table.horizontalHeader().sizeHint().height()
+                         + rows + spare + 2 * table.frameWidth())
+
+
+def _fixed_item(text: str) -> QTableWidgetItem:
+    item = QTableWidgetItem(text)
+    item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+    return item
+
+
+class AboutTab(QWidget):
+    """What the recording is, in the person's own words: the top-level
+    ``about:`` section (ADR-0019).
+
+    Every field is optional and no analysis reads any of it. The tab writes
+    the section in the shared contract's order (``about.KEY_ORDER``) and
+    keeps what it has no field for: ``run:`` — a catalogue's, shown and never
+    typed — any key it does not know, and the other keys of a level's
+    mapping, where only ``definition`` is this tab's to change. A section
+    nobody touched is written back exactly as the file had it, so opening a
+    config never makes it look changed.
+
+    The factor kinds and level meanings follow the Global tab's factors
+    table: one row per declared level, and what was typed is remembered while
+    the factors change. A level the design stops declaring loses its row and
+    is no longer written. A level the file describes but the design never
+    declared has no row: it is not this tab's to drop, so it is kept, and
+    saving warns that it is undeclared.
+    """
+
+    def __init__(self, global_tab: GlobalTab):
+        super().__init__()
+        self._global_tab = global_tab
+        #: The file's ``about:`` as loaded. Written back as it is for as long
+        #: as the form says what it said at load.
+        self._raw = _NO_ABOUT
+        #: The section the form's edits are laid over: as loaded, or as
+        #: started from another recording. Holds what the form has no field
+        #: for.
+        self._base: dict = {}
+        #: :meth:`section` as it was right after the load.
+        self._at_load: dict = {}
+        #: Sex values the file holds that have no checkbox; written back.
+        self._other_sex: list[str] = []
+        self._factors: dict[str, list[str]] = {}
+        ## What was loaded or typed, by factor and by (factor, level). It
+        ## outlives a row, so a level renamed and renamed back is as it was.
+        self._kinds: dict[str, str] = {}
+        self._meanings: dict[tuple[str, str], str] = {}
+        ## Every factor and level that has had a row since the load. Only
+        ## those are this tab's to stop writing.
+        self._shown_factors: set[str] = set()
+        self._shown_levels: set[tuple[str, str]] = set()
+        self._config_path: Path | None = None
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        outer.addWidget(scroll)
+        page = QWidget()
+        scroll.setWidget(page)
+        layout = QVBoxLayout(page)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        info_row = QHBoxLayout()
+        info = QLabel(ABOUT_INTRO)
+        info.setWordWrap(True)
+        info_row.addWidget(info, 1)
+        info_row.addWidget(HelpButton("config_overview", tooltip="The about: section"))
+        layout.addLayout(info_row)
+
+        start_row = QHBoxLayout()
+        self.start_button = QPushButton("Start from another recording…")
+        self.start_button.setToolTip(START_FROM_TOOLTIP)
+        self.start_button.clicked.connect(self._choose_start_from)
+        self.start_note = QLabel("")
+        self.start_note.setWordWrap(True)
+        self.start_note.setStyleSheet("font-style: italic;")
+        start_row.addWidget(self.start_button)
+        start_row.addWidget(self.start_note, 1)
+        layout.addLayout(start_row)
+
+        def _notes(placeholder: str, height: int) -> QPlainTextEdit:
+            edit = QPlainTextEdit()
+            edit.setPlaceholderText(placeholder)
+            edit.setFixedHeight(height)
+            edit.setTabChangesFocus(True)
+            return edit
+
+        def _heading(text: str) -> QLabel:
+            label = _section_label(text)
+            label.setContentsMargins(0, 10, 0, 0)
+            return label
+
+        ## One form for every field, so the fields line up down the page;
+        ## the section headings are rows that span it.
+        form = self._form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        layout.addLayout(form)
+
+        form.addRow(_heading("This recording"))
+        self.title = QLineEdit()
+        self.title.setPlaceholderText(
+            "One line, such as: Light preference, MBON10 silenced, replicate 1")
+        self.title_count = QLabel("")
+        self.title_count.setToolTip(
+            f"A title of up to {about_mod.TITLE_LIMIT} characters fits on one "
+            "line in a list of recordings. A longer one is still saved.")
+        self.title.textChanged.connect(self._on_title_changed)
+        title_row = QHBoxLayout()
+        title_row.addWidget(self.title, 1)
+        title_row.addWidget(self.title_count)
+        form.addRow("Title:", title_row)
+        self.purpose = _notes(
+            "One or two sentences: what was varied, in which flies, and what "
+            "was measured.", 64)
+        form.addRow("Purpose:", self.purpose)
+        self.experimenter = QLineEdit()
+        self.experimenter.setPlaceholderText("Who ran it, such as your lab handle")
+        form.addRow("Experimenter:", self.experimenter)
+        self.series = QLineEdit()
+        self.series.setPlaceholderText(
+            "Shared by replicate recordings, such as valence-mbon10-2026")
+        form.addRow("Series:", self.series)
+        self.run_value = QLabel("")
+        self.run_value.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.run_value.setToolTip(RUN_TOOLTIP)
+        form.addRow("Run:", self.run_value)
+
+        form.addRow(_heading("The flies"))
+        self.organism = QLineEdit()
+        self.organism.setPlaceholderText("Drosophila melanogaster")
+        form.addRow("Organism:", self.organism)
+        sex_row = QHBoxLayout()
+        self.sex_checks: dict[str, QCheckBox] = {}
+        for value in about_mod.SEX_CHOICES:
+            check = QCheckBox(value)
+            self.sex_checks[value] = check
+            sex_row.addWidget(check)
+        self.other_sex_label = QLabel("")
+        sex_row.addWidget(self.other_sex_label)
+        sex_row.addStretch(1)
+        form.addRow("Sex:", sex_row)
+        self.age_at_start = QLineEdit()
+        self.age_at_start.setPlaceholderText(
+            "At the start of the recording, such as 5-7 days")
+        form.addRow("Age at start:", self.age_at_start)
+
+        form.addRow(_heading("Protocol and notes"))
+        self.protocol_edits = {field: QLineEdit()
+                               for field in about_mod.PROTOCOL_FIELDS}
+        self.protocol_edits["name"].setPlaceholderText("Such as Valence two-choice")
+        self.protocol_edits["version"].setPlaceholderText("Such as 2")
+        self.protocol_edits["link"].setPlaceholderText(
+            "Where the protocol is written down")
+        form.addRow("Protocol:", self.protocol_edits["name"])
+        form.addRow("Version:", self.protocol_edits["version"])
+        form.addRow("Link:", self.protocol_edits["link"])
+        self.notes = _notes("Anything else worth knowing about this recording.", 80)
+        form.addRow("Notes:", self.notes)
+
+        #: The text fields, by the key each is saved under.
+        self._text_widgets = {
+            "title": self.title, "purpose": self.purpose,
+            "experimenter": self.experimenter, "series": self.series,
+            "organism": self.organism, "age_at_start": self.age_at_start,
+            "notes": self.notes,
+        }
+        #: The keys this form edits. Any other key of the section is kept.
+        self._form_keys = {*self._text_widgets, about_mod.SEX_KEY,
+                           about_mod.PROTOCOL_KEY, about_mod.FACTORS_KEY}
+
+        layout.addWidget(_heading("Factors and levels"))
+        hint = QLabel(
+            "What kind of variable each design factor is, and a few words for "
+            "each level: the cross, the dose, the diet. The rows follow the "
+            "factors on the Global tab.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.kinds_table = QTableWidget(0, 2)
+        self.kinds_table.setHorizontalHeaderLabels(["Factor", "Kind"])
+        self.meanings_table = QTableWidget(0, 3)
+        self.meanings_table.setHorizontalHeaderLabels(
+            ["Factor", "Level", "What it means"])
+        for table in (self.kinds_table, self.meanings_table):
+            header = table.horizontalHeader()
+            for column in range(table.columnCount() - 1):
+                header.setSectionResizeMode(
+                    column, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(table.columnCount() - 1,
+                                        QHeaderView.ResizeMode.Stretch)
+            table.verticalHeader().setVisible(False)
+            table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+            table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            layout.addWidget(table)
+        ## A kind is one word: the table need not span the page to hold it.
+        self.kinds_table.setMaximumWidth(360)
+        layout.addStretch(1)
+
+        self._global_tab.factorsChanged.connect(self._on_factors_changed)
+        self.load({})
+
+    # ------------------------------------------------------------------
+    # The factor and level rows
+    # ------------------------------------------------------------------
+
+    def _on_title_changed(self, text: str) -> None:
+        n = len(text.strip())
+        self.title_count.setText(f"{n}/{about_mod.TITLE_LIMIT}" if n else "")
+        self.title_count.setStyleSheet(
+            "color: #d97706;" if n > about_mod.TITLE_LIMIT else "")
+
+    def _on_factors_changed(self, factors: dict[str, list[str]]) -> None:
+        """Rebuild the rows when the Global tab's factors change, keeping
+        what was typed."""
+        self._harvest()
+        self._factors = {str(name): list(levels) for name, levels in factors.items()}
+        self._rebuild_rows()
+
+    def _harvest(self) -> None:
+        """Take what the rows now say into the tab's memory."""
+        for r in range(self.kinds_table.rowCount()):
+            name = self.kinds_table.item(r, 0).text()
+            kind = self.kinds_table.cellWidget(r, 1).currentData() or ""
+            if kind:
+                self._kinds[name] = kind
+            else:
+                self._kinds.pop(name, None)
+        for r in range(self.meanings_table.rowCount()):
+            key = (self.meanings_table.item(r, 0).text(),
+                   self.meanings_table.item(r, 1).text())
+            text = self.meanings_table.cellWidget(r, 2).text().strip()
+            if text:
+                self._meanings[key] = text
+            else:
+                self._meanings.pop(key, None)
+
+    def _kind_combo(self, kind: str) -> QComboBox:
+        combo = _NoScrollComboBox()
+        combo.addItem("", "")
+        for value in about_mod.FACTOR_KINDS:
+            combo.addItem(value, value)
+        if kind and combo.findData(kind) < 0:
+            combo.addItem(kind, kind)          # kept as the file has it
+        combo.setCurrentIndex(max(combo.findData(kind), 0))
+        combo.setToolTip("What kind of variable this factor is "
+                         "(about.factors.<factor>.kind)")
+        return combo
+
+    def _rebuild_rows(self) -> None:
+        self.kinds_table.setRowCount(0)
+        self.meanings_table.setRowCount(0)
+        for name, levels in self._factors.items():
+            r = self.kinds_table.rowCount()
+            self.kinds_table.insertRow(r)
+            self.kinds_table.setItem(r, 0, _fixed_item(name))
+            self.kinds_table.setCellWidget(
+                r, 1, self._kind_combo(self._kinds.get(name, "")))
+            self._shown_factors.add(name)
+            for level in dict.fromkeys(levels):
+                r = self.meanings_table.rowCount()
+                self.meanings_table.insertRow(r)
+                self.meanings_table.setItem(r, 0, _fixed_item(name))
+                self.meanings_table.setItem(r, 1, _fixed_item(level))
+                edit = QLineEdit(self._meanings.get((name, level), ""))
+                edit.setFrame(False)
+                edit.setToolTip("A few words: the cross, the dose, the diet. "
+                                "Optional; saved under about.factors.")
+                self.meanings_table.setCellWidget(r, 2, edit)
+                self._shown_levels.add((name, level))
+        _fit_rows(self.kinds_table)
+        _fit_rows(self.meanings_table)
+
+    def kinds(self) -> dict[str, str]:
+        """Each declared factor's kind as the rows show it (``""`` for none)."""
+        return {self.kinds_table.item(r, 0).text():
+                self.kinds_table.cellWidget(r, 1).currentData() or ""
+                for r in range(self.kinds_table.rowCount())}
+
+    def meanings(self) -> dict[tuple[str, str], str]:
+        """Each declared level's meaning as the rows show it, in row order."""
+        return {(self.meanings_table.item(r, 0).text(),
+                 self.meanings_table.item(r, 1).text()):
+                self.meanings_table.cellWidget(r, 2).text().strip()
+                for r in range(self.meanings_table.rowCount())}
+
+    def kind_combo(self, factor: str) -> QComboBox:
+        """The kind dropdown of *factor*'s row."""
+        for r in range(self.kinds_table.rowCount()):
+            if self.kinds_table.item(r, 0).text() == factor:
+                return self.kinds_table.cellWidget(r, 1)
+        raise KeyError(factor)
+
+    def meaning_edit(self, factor: str, level: str) -> QLineEdit:
+        """The meaning field of the row for *level* of *factor*."""
+        for r in range(self.meanings_table.rowCount()):
+            if (self.meanings_table.item(r, 0).text() == factor
+                    and self.meanings_table.item(r, 1).text() == level):
+                return self.meanings_table.cellWidget(r, 2)
+        raise KeyError((factor, level))
+
+    # ------------------------------------------------------------------
+    # Load / dump
+    # ------------------------------------------------------------------
+
+    def set_location(self, config_path) -> None:
+        """Tell the tab which config it is editing: where **Start from
+        another recording…** starts looking, and the one file it refuses."""
+        self._config_path = Path(config_path) if config_path else None
+
+    def load(self, config: dict) -> None:
+        config = config if isinstance(config, dict) else {}
+        self._raw = config.get(about_mod.ABOUT_KEY, _NO_ABOUT)
+        self._base = copy.deepcopy(about_mod.read_about(config))
+        ## Read from the Global tab, not from the config: its table is what
+        ## the rows follow from here on.
+        self._factors = self._global_tab.get_factors()
+        self._fill()
+        self._at_load = self.section()
+        self.start_note.setText("")
+
+    def _fill(self) -> None:
+        """Set every widget from :attr:`_base`."""
+        section = self._base
+        for key, widget in self._text_widgets.items():
+            text = about_mod._text(section.get(key))
+            if isinstance(widget, QPlainTextEdit):
+                widget.setPlainText(text)
+            else:
+                widget.setText(text)
+        run = about_mod._text(section.get(about_mod.RUN_KEY))
+        self.run_value.setText(run)
+        self._form.setRowVisible(self.run_value, bool(run))
+
+        sexes = about_mod.sex_values(section.get(about_mod.SEX_KEY))
+        lowered = [value.lower() for value in sexes]
+        for value, check in self.sex_checks.items():
+            check.setChecked(value in lowered)
+        self._other_sex = [value for value in sexes
+                           if value.lower() not in self.sex_checks]
+        self.other_sex_label.setText(
+            f"also: {', '.join(self._other_sex)}" if self._other_sex else "")
+
+        protocol = section.get(about_mod.PROTOCOL_KEY)
+        if isinstance(protocol, str):
+            protocol = {"name": protocol}
+        protocol = protocol if isinstance(protocol, Mapping) else {}
+        for field, edit in self.protocol_edits.items():
+            edit.setText(about_mod._text(protocol.get(field)))
+
+        notes = about_mod.factor_notes(section)
+        self._kinds = {name: body["kind"] for name, body in notes.items()
+                       if body["kind"]}
+        self._meanings = {(name, level): text for name, body in notes.items()
+                          for level, text in body["levels"].items() if text}
+        self._shown_factors, self._shown_levels = set(), set()
+        self._rebuild_rows()
+
+    def section(self) -> dict:
+        """``about:`` as the tab describes it, in the order it is written:
+        the form's fields over what the form has no field for. ``{}`` when
+        there is nothing to write."""
+        self._harvest()
+        section = {key: copy.deepcopy(value) for key, value in self._base.items()
+                   if key not in self._form_keys}
+        for key, widget in self._text_widgets.items():
+            section[key] = (widget.toPlainText() if isinstance(widget, QPlainTextEdit)
+                            else widget.text()).strip()
+        section[about_mod.SEX_KEY] = [
+            value for value, check in self.sex_checks.items() if check.isChecked()
+        ] + self._other_sex
+        kept = self._base.get(about_mod.PROTOCOL_KEY)
+        protocol = ({key: copy.deepcopy(value) for key, value in kept.items()
+                     if key not in about_mod.PROTOCOL_FIELDS}
+                    if isinstance(kept, Mapping) else {})
+        protocol.update({field: edit.text().strip()
+                         for field, edit in self.protocol_edits.items()})
+        section[about_mod.PROTOCOL_KEY] = protocol
+        section[about_mod.FACTORS_KEY] = self._factors_section()
+        return about_mod.clean_about(section)
+
+    def _factors_section(self) -> dict:
+        """``about.factors`` to write: the base's entries with the rows laid
+        over them."""
+        base = self._base.get(about_mod.FACTORS_KEY)
+        base = base if isinstance(base, Mapping) else {}
+        out: dict = {}
+        described: set[str] = set()
+        for raw_name, body in base.items():
+            name = str(raw_name).strip()
+            described.add(name)
+            if name not in self._shown_factors:
+                out[raw_name] = copy.deepcopy(body)      # never had a row: kept
+            elif name in self._factors:
+                entry = self._factor_entry(name, body)
+                if entry:
+                    out[name] = entry
+            ## else: the design stopped declaring it, and its rows went.
+        for name in self._factors:
+            if name not in described:
+                entry = self._factor_entry(name, {})
+                if entry:
+                    out[name] = entry
+        return out
+
+    def _factor_entry(self, name: str, body) -> dict:
+        body = body if isinstance(body, Mapping) else {}
+        entry: dict = {}
+        if self._kinds.get(name):
+            entry["kind"] = self._kinds[name]
+        base_levels = body.get("levels")
+        base_levels = base_levels if isinstance(base_levels, Mapping) else {}
+        declared = list(dict.fromkeys(self._factors.get(name, [])))
+        levels: dict = {}
+        described: set[str] = set()
+        for raw_level, base_entry in base_levels.items():
+            level = str(raw_level).strip()
+            described.add(level)
+            if (name, level) not in self._shown_levels:
+                levels[raw_level] = copy.deepcopy(base_entry)    # never had a row: kept
+            elif level in declared:
+                ## Only the meaning is this tab's: text stays text, and a
+                ## mapping keeps its other keys.
+                value = about_mod.with_meaning(
+                    base_entry, self._meanings.get((name, level), ""))
+                if value is not None:
+                    levels[level] = value
+        for level in declared:
+            if level not in described and self._meanings.get((name, level)):
+                levels[level] = self._meanings[(name, level)]
+        if levels:
+            entry["levels"] = levels
+        entry.update({key: copy.deepcopy(value) for key, value in body.items()
+                      if key not in ("kind", "levels")})
+        return entry
+
+    def dump(self) -> dict:
+        """``{"about": ...}`` to write, or ``{}`` for no key at all.
+
+        While the form says what it said at load, that is the file's own
+        value, untouched: a section in another order, or holding something
+        this form would write differently, must not look like an edit.
+        """
+        section = self.section()
+        if section == self._at_load:
+            return {} if self._raw is _NO_ABOUT else {about_mod.ABOUT_KEY: self._raw}
+        return {about_mod.ABOUT_KEY: section} if section else {}
+
+    # ------------------------------------------------------------------
+    # Start from another recording…
+    # ------------------------------------------------------------------
+
+    def start_from(self, earlier) -> list[str]:
+        """Fill in the shared part of *earlier* — another recording's
+        ``about:`` — and return the fields taken (none when it has nothing
+        this config can use).
+
+        ``about.start_from`` decides what that is: who ran it, the series,
+        the flies, the protocol, and each factor's kind and each level's
+        whole entry, limited to the factors and levels declared here. The
+        title, the purpose, the notes and ``run:`` are never taken.
+        """
+        taken = list(about_mod.shared_about(earlier, self._factors))
+        if not taken:
+            return []
+        self._base = about_mod.start_from(self.section(), earlier, self._factors)
+        self._fill()
+        return taken
+
+    def start_from_file(self, path) -> bool:
+        """:meth:`start_from` the ``about:`` of the config at *path*. What
+        happened is said beside the button; True when something was taken."""
+        path = Path(path)
+        label = f"{path.parent.name}/{path.name}"
+        if self._config_path is not None and _same_file(path, self._config_path):
+            self.start_note.setText(
+                f"{label} is this recording's own config: choose another "
+                "recording's.")
+            return False
+        try:
+            with open(path, encoding="utf-8") as handle:
+                config = yaml.safe_load(handle)
+        except Exception as err:  # noqa: BLE001 — said, never raised in a slot
+            self.start_note.setText(f"Could not read {label}: {err}")
+            return False
+        taken = self.start_from(about_mod.read_about(config))
+        if not taken:
+            self.start_note.setText(
+                f"{label} has nothing to start from: no about: section, or "
+                "none of what replicates share for the factors declared here.")
+            return False
+        self.start_note.setText(
+            f"Started from {label}: {', '.join(taken)}. The title, the "
+            "purpose and the notes are this recording's own and were left as "
+            "they are. Nothing is saved until you save.")
+        return True
+
+    def _choose_start_from(self) -> None:
+        ## Beside this recording's folder is where its earlier replicates are.
+        start = (str(self._config_path.parent.parent)
+                 if self._config_path is not None else os.getcwd())
+        chosen, _ = QFileDialog.getOpenFileName(
+            self, "Start from another recording's config", start,
+            "Tracking config (tracking_config.yaml);;"
+            "YAML files (*.yaml *.yml);;All files (*)")
+        if chosen:
+            self.start_from_file(chosen)
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return False

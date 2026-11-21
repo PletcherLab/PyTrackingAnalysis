@@ -67,14 +67,23 @@ def full_about() -> dict:
 
 def recording(root, about=None, **kwargs):
     """A complete synthetic Experiment Directory declaring :data:`FACTORS`,
-    with *about* as its ``about:`` section (none when ``None``)."""
+    with *about* as its ``about:`` section (none when ``None``).
+
+    Its config is one the Config Editor writes back unchanged — each region
+    states its multipliers — so that whatever an editor test finds changed,
+    the section changed it."""
     extra_global = {"experimental_design_factors": copy.deepcopy(FACTORS),
                     **kwargs.pop("extra_global", {})}
     top = dict(kwargs.pop("extra_top_level", {}))
     if about is not None:
         top[KEY] = copy.deepcopy(about)
-    return write_project(root, extra_global=extra_global,
-                         extra_top_level=top or None, **kwargs)
+    member = write_project(root, extra_global=extra_global,
+                           extra_top_level=top or None, **kwargs)
+    config = read_config(member)
+    for region in config["tracking_regions"].values():
+        region.update({"x_location_multiplier": 1, "y_location_multiplier": 1})
+    write_config(member, config)
+    return member
 
 
 def read_config(directory) -> dict:
@@ -779,3 +788,547 @@ def test_t5_the_validate_design_step_logs_it(tmp_path):
     project_actions._exec_validate_design({}, ctx)
     assert any(line.startswith("Note: about: replicates describe Genotype")
                for line in logged)
+
+
+# ---------------------------------------------------------------------------
+# The Config Editor's About tab (T2, T3, A3, A6, A8)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def dialogs(monkeypatch):
+    """Capture the editor's modal dialogs: they would block a headless run."""
+    from pytrackinganalysis.apps import config_editor as ce
+
+    seen: dict[str, list] = {"information": [], "warning": [], "critical": []}
+    for kind in seen:
+        monkeypatch.setattr(
+            ce.QMessageBox, kind,
+            lambda *args, _kind=kind, **kwargs: seen[_kind].append(args))
+    monkeypatch.setattr(ce.QMessageBox, "question",
+                        lambda *args, **kwargs: ce.QMessageBox.StandardButton.No)
+    return seen
+
+
+@pytest.fixture
+def open_editor(qapp, dialogs):
+    """Open the Config Editor on a recording's config (or its folder)."""
+    from pytrackinganalysis.apps.config_editor import ConfigEditorWindow
+
+    windows = []
+
+    def _open(target):
+        window = ConfigEditorWindow(str(target))
+        windows.append(window)
+        return window
+
+    yield _open
+    for window in windows:
+        window.close()
+
+
+def is_dirty(window) -> bool:
+    window._refresh_dirty()
+    return bool(window._dirty_label.text())
+
+
+def spelled(value) -> str:
+    """*value* as YAML, key order and all: equal text is an equal section
+    written in the same order."""
+    return yaml.safe_dump(value, sort_keys=False, allow_unicode=True)
+
+
+def test_t2_a_full_section_opens_and_shows_every_field(tmp_path, open_editor):
+    member = recording(tmp_path / "M1", about=full_about())
+    window = open_editor(member)
+    tab = window._about_tab
+
+    assert window._tabs.count() == 4
+    assert window._tabs.tabText(3) == "About" and window._tabs.widget(3) is tab
+    assert tab.title.text() == FULL["title"]
+    assert tab.title_count.text() == f"{len(FULL['title'])}/60"
+    assert tab.purpose.toPlainText() == FULL["purpose"]
+    assert tab.experimenter.text() == "atester"
+    assert tab.series.text() == "valence-mbon10-2026"
+    assert tab.organism.text() == "Drosophila melanogaster"
+    assert tab.sex_checks["female"].isChecked() and not tab.sex_checks["male"].isChecked()
+    assert tab.age_at_start.text() == "5-7 days"
+    assert {field: edit.text() for field, edit in tab.protocol_edits.items()} == \
+        FULL["protocol"]
+    assert tab.notes.toPlainText() == FULL["notes"]
+    assert tab.kinds() == {"Genotype": "genotype"}
+    assert tab.meanings() == {("Genotype", "Ctrl"): "w1118 > UAS-GtACR1",
+                              ("Genotype", "Treated"): "R12C11-GAL4 > UAS-GtACR1"}
+    ## run: is the catalogue's: shown, with nothing to type into.
+    assert tab.run_value.text() == FULL["run"] and not tab.run_value.isHidden()
+    assert not hasattr(tab.run_value, "setReadOnly")
+
+
+def test_t2_a_full_section_is_not_dirty_and_saves_to_an_equal_section(
+        tmp_path, open_editor, dialogs):
+    member = recording(tmp_path / "M1", about=full_about())
+    window = open_editor(member)
+
+    assert not is_dirty(window)
+    assert window._dump_config()[KEY] == FULL
+    window._save()
+
+    assert dialogs["information"] and not dialogs["warning"]
+    assert read_config(member)[KEY] == FULL
+    assert not is_dirty(window)
+
+
+def test_t2_a_config_without_one_is_not_dirty_and_saves_without_the_key(
+        tmp_path, open_editor):
+    member = recording(tmp_path / "M1")
+    before = read_config(member)
+    window = open_editor(member)
+    tab = window._about_tab
+
+    assert not is_dirty(window)
+    assert KEY not in window._dump_config()
+    assert tab.title.text() == "" and tab.run_value.isHidden()
+    assert list(tab.meanings().values()) == ["", ""]         # a row per level, all blank
+    window._save()
+
+    saved = read_config(member)
+    assert KEY not in saved and list(saved) == list(before)
+    assert KEY not in (member / "tracking_config.yaml").read_text(encoding="utf-8")
+
+
+#: Sections a person or another program could have written that are not in
+#: the form this package writes. Opening one must not make the config look
+#: changed, and saving with the tab untouched must leave it as it was.
+AS_WRITTEN = {
+    "keys in another order": {"notes": "N", "x_lab": {"a": 1}, "title": "T",
+                              "run": "R-1", "experimenter": "atester"},
+    "sex as one word": {"sex": "Female"},
+    "protocol as text": {"protocol": "Valence two-choice"},
+    "untrimmed text": {"title": "  A title  ", "purpose": "Two lines.\n\n"},
+    "numbers for text": {"age_at_start": 5, "protocol": {"version": 2}},
+    "a level the design lacks": {"factors": {"Genotype": {"levels": {
+        "Gone": {"definition": "an earlier level", "term": "GEN-0001"}}}}},
+    "an undeclared factor": {"factors": {"Sex": {"kind": "sex",
+                                                 "levels": {"F": "virgin"}}}},
+    "wrong types": WRONG_TYPES,
+    "not a mapping": "just some text",
+    "empty": {},
+    "null": None,
+}
+
+
+@pytest.mark.parametrize("section", list(AS_WRITTEN.values()), ids=list(AS_WRITTEN))
+def test_t2_a_section_merely_held_is_not_a_change(tmp_path, open_editor, section):
+    member = recording(tmp_path / "M1")
+    config = read_config(member)
+    config[KEY] = copy.deepcopy(section)
+    write_config(member, config)
+    window = open_editor(member)
+
+    assert not is_dirty(window)
+    assert spelled(window._dump_config()[KEY]) == spelled(section)
+    window._save()
+    assert spelled(read_config(member)[KEY]) == spelled(section)
+
+
+def test_t2_an_edited_section_is_written_in_the_contracts_order(tmp_path, open_editor):
+    section = {"notes": "N", "x_lab": {"a": 1}, "title": "T", "sex": "Female",
+               "protocol": "Valence two-choice", "run": "R-1",
+               "factors": {"Genotype": {"levels": {"Ctrl": "w1118"}, "kind": "Genotype",
+                                        "x_factor": True}}}
+    member = recording(tmp_path / "M1", about=section)
+    window = open_editor(member)
+    tab = window._about_tab
+
+    tab.experimenter.setText("  atester ")
+    assert is_dirty(window)
+    window._save()
+
+    saved = read_config(member)[KEY]
+    assert list(saved) == ["run", "title", "experimenter", "sex", "protocol", "notes",
+                           "factors", "x_lab"]
+    assert saved == {
+        "run": "R-1", "title": "T", "experimenter": "atester", "sex": ["female"],
+        "protocol": {"name": "Valence two-choice"}, "notes": "N",
+        "factors": {"Genotype": {"kind": "genotype", "levels": {"Ctrl": "w1118"},
+                                 "x_factor": True}},
+        "x_lab": {"a": 1}}
+    assert not is_dirty(window)
+
+
+def test_t2_a_new_section_is_written_at_the_top_of_the_file(tmp_path, open_editor):
+    plain = recording(tmp_path / "Plain")
+    window = open_editor(plain)
+    window._about_tab.title.setText("A first title")
+    window._save()
+    assert list(read_config(plain)) == [KEY, "global", "tracking_regions"]
+    assert read_config(plain)[KEY] == {"title": "A first title"}
+
+    ## After data_folder: when the file leads with one, as a catalogue writes it.
+    member = tmp_path / "Member"
+    member.mkdir()
+    write_config(member, {"data_folder": "../Plain/data", **read_config(plain)})
+    config = read_config(member)
+    del config[KEY]
+    write_config(member, config)
+    window = open_editor(member)
+    window._about_tab.title.setText("A first title")
+    assert list(window._dump_config()) == ["data_folder", KEY, "global",
+                                           "tracking_regions"]
+
+
+def test_t2_blanking_every_field_writes_no_section(tmp_path, open_editor):
+    member = recording(tmp_path / "M1", about={"title": "T", "purpose": "P",
+                                               "sex": ["male"],
+                                               "protocol": {"name": "P"}})
+    window = open_editor(member)
+    tab = window._about_tab
+    tab.title.clear()
+    tab.purpose.clear()
+    tab.sex_checks["male"].setChecked(False)
+    tab.protocol_edits["name"].clear()
+
+    assert KEY not in window._dump_config()
+    window._save()
+    assert KEY not in read_config(member)
+
+
+def test_t2_what_the_form_has_no_field_for_outlives_blanking_it(tmp_path, open_editor):
+    member = recording(tmp_path / "M1", about={"run": "R-1", "title": "T",
+                                               "x_lab": {"a": 1}})
+    window = open_editor(member)
+    window._about_tab.title.clear()
+    assert window._dump_config()[KEY] == {"run": "R-1", "x_lab": {"a": 1}}
+
+
+def test_the_title_count_turns_at_the_limit_and_nothing_is_refused(
+        tmp_path, open_editor, dialogs):
+    member = recording(tmp_path / "M1")
+    window = open_editor(member)
+    tab = window._about_tab
+
+    assert tab.title_count.text() == ""
+    tab.title.setText("x" * 60)
+    assert tab.title_count.text() == "60/60" and not tab.title_count.styleSheet()
+    tab.title.setText("x" * 61)
+    assert tab.title_count.text() == "61/60" and tab.title_count.styleSheet()
+    window._save()
+
+    assert read_config(member)[KEY] == {"title": "x" * 61}   # saved all the same
+    [saved] = dialogs["information"]
+    assert "about.title is 61 characters" in saved[2]        # and said, as a note
+    assert not dialogs["warning"] and not dialogs["critical"]
+
+
+def test_a8_an_odd_section_still_saves_and_the_editor_says_what_is_odd(
+        tmp_path, open_editor, dialogs):
+    member = recording(tmp_path / "M1", about=copy.deepcopy(ODD_VALUES))
+    window = open_editor(member)
+    window._global_tab.facet_cutoffs.setText("3, 5")         # some other edit
+    window._save()
+
+    assert not dialogs["warning"] and not dialogs["critical"]
+    [saved] = dialogs["information"]
+    for warning in config_validation.config_warnings(read_config(member)):
+        assert warning in saved[2]
+    assert read_config(member)["global"]["facet_cutoffs"] == [3, 5]
+    assert spelled(read_config(member)[KEY]) == spelled(ODD_VALUES)   # untouched, kept
+
+
+def test_a3_the_config_editor_keeps_the_section_through_other_edits(
+        tmp_path, open_editor):
+    member = recording(tmp_path / "M1", about=full_about(),
+                       extra_top_level={"scripts": [copy.deepcopy(SCRIPT)]})
+    window = open_editor(member)
+    window._global_tab.facet_cutoffs.setText("3, 5")
+    window._tracking_tab.table.item(0, 0).setText("T_9")
+    window._save()
+
+    saved = read_config(member)
+    assert saved[KEY] == FULL
+    assert spelled(saved[KEY]) == spelled(FULL)
+    assert saved["scripts"] == [SCRIPT]
+    assert "T_9" in saved["tracking_regions"]
+
+
+# ---- factors and levels (T3) ------------------------------------------------
+
+def rename_levels(window, text, row=0) -> None:
+    """Type *text* into the Global tab's levels cell, as a person would."""
+    window._global_tab.factors_table.item(row, 1).setText(text)
+
+
+def test_t3_renaming_a_level_drops_its_row_and_keeps_the_others(tmp_path, open_editor):
+    member = recording(tmp_path / "M1", about=full_about())
+    window = open_editor(member)
+    tab = window._about_tab
+
+    rename_levels(window, "Control, Treated")
+
+    assert tab.meanings() == {("Genotype", "Control"): "",
+                              ("Genotype", "Treated"): "R12C11-GAL4 > UAS-GtACR1"}
+    assert tab.kinds() == {"Genotype": "genotype"}
+    levels = window._dump_config()[KEY]["factors"]["Genotype"]["levels"]
+    assert levels == {"Treated": "R12C11-GAL4 > UAS-GtACR1"}
+    ## Everything else in the section is as it was.
+    rest = {k: v for k, v in window._dump_config()[KEY].items() if k != "factors"}
+    assert rest == {k: v for k, v in FULL.items() if k != "factors"}
+
+
+def test_t3_a_level_renamed_back_has_its_whole_entry_again(tmp_path, open_editor):
+    """A level's entry may hold a catalogue's keys; a slip of the keyboard on
+    the Global tab must not cost them."""
+    member = recording(tmp_path / "M1", about=full_about())
+    window = open_editor(member)
+
+    rename_levels(window, "Control, Treated")
+    assert "Ctrl" not in window._dump_config()[KEY]["factors"]["Genotype"]["levels"]
+    rename_levels(window, "Ctrl, Treated")
+
+    assert window._about_tab.meanings()[("Genotype", "Ctrl")] == "w1118 > UAS-GtACR1"
+    ## The section is the file's own again, to the letter. (The tracking
+    ## regions that named Ctrl lost their level, as they always have.)
+    assert spelled(window._dump_config()[KEY]) == spelled(read_config(member)[KEY])
+
+
+def test_t3_what_was_typed_is_kept_as_the_factors_change(tmp_path, open_editor):
+    member = recording(tmp_path / "M1")
+    window = open_editor(member)
+    tab = window._about_tab
+
+    tab.meaning_edit("Genotype", "Ctrl").setText("w1118")
+    tab.kind_combo("Genotype").setCurrentIndex(tab.kind_combo("Genotype").findData("genotype"))
+    rename_levels(window, "Ctrl, Treated, Rescue")
+    table = window._global_tab.factors_table
+    table.insertRow(1)
+    from PyQt6.QtWidgets import QTableWidgetItem
+    table.setItem(1, 0, QTableWidgetItem("Sex"))
+    table.setItem(1, 1, QTableWidgetItem("Female, Male"))
+
+    assert list(tab.meanings()) == [("Genotype", "Ctrl"), ("Genotype", "Treated"),
+                                    ("Genotype", "Rescue"), ("Sex", "Female"),
+                                    ("Sex", "Male")]
+    assert tab.meanings()[("Genotype", "Ctrl")] == "w1118"
+    assert tab.kinds() == {"Genotype": "genotype", "Sex": ""}
+    tab.meaning_edit("Sex", "Female").setText("virgin")
+    tab.kind_combo("Sex").setCurrentIndex(tab.kind_combo("Sex").findData("sex"))
+    assert window._dump_config()[KEY] == {"factors": {
+        "Genotype": {"kind": "genotype", "levels": {"Ctrl": "w1118"}},
+        "Sex": {"kind": "sex", "levels": {"Female": "virgin"}}}}
+
+
+def test_t3_a_renamed_factor_drops_its_kind_and_its_rows(tmp_path, open_editor):
+    member = recording(tmp_path / "M1", about=full_about())
+    window = open_editor(member)
+
+    window._global_tab.factors_table.item(0, 0).setText("Line")
+
+    assert window._about_tab.kinds() == {"Line": ""}
+    assert "factors" not in window._dump_config()[KEY]
+
+
+def test_a_level_mapping_keeps_its_other_keys_when_its_meaning_changes(
+        tmp_path, open_editor):
+    member = recording(tmp_path / "M1", about=full_about())
+    window = open_editor(member)
+    tab = window._about_tab
+    entry = FULL["factors"]["Genotype"]["levels"]["Ctrl"]
+
+    tab.meaning_edit("Genotype", "Ctrl").setText(" the control cross ")
+    tab.meaning_edit("Genotype", "Treated").setText("the silenced cross")
+    levels = window._dump_config()[KEY]["factors"]["Genotype"]["levels"]
+    assert levels["Ctrl"] == {**entry, "definition": "the control cross"}
+    assert levels["Treated"] == "the silenced cross"         # text stays text
+
+    tab.meaning_edit("Genotype", "Ctrl").clear()
+    tab.meaning_edit("Genotype", "Treated").clear()
+    levels = window._dump_config()[KEY]["factors"]["Genotype"]["levels"]
+    assert levels == {"Ctrl": {k: v for k, v in entry.items() if k != "definition"}}
+
+
+def test_what_the_tab_never_showed_is_kept_when_another_field_is_edited(
+        tmp_path, open_editor, dialogs):
+    """A level or factor the design does not declare has no row. It is not
+    this tab's to drop: it stays, and the save says it is undeclared."""
+    section = full_about()
+    section["factors"]["Genotype"]["levels"]["Gone"] = {"definition": "an earlier level",
+                                                        "term": "GEN-0001"}
+    section["factors"]["Genotype"]["x_factor"] = True
+    section["factors"]["Sex"] = {"kind": "sex", "levels": {"F": "virgin"}}
+    member = recording(tmp_path / "M1", about=section)
+    window = open_editor(member)
+    tab = window._about_tab
+
+    assert list(tab.meanings()) == [("Genotype", "Ctrl"), ("Genotype", "Treated")]
+    tab.title.setText("A new title")
+    window._save()
+
+    saved = read_config(member)[KEY]
+    assert saved == {**section, "title": "A new title"}
+    [said] = dialogs["information"]
+    assert "'Gone'" in said[2] and "'Sex'" in said[2]
+
+
+def test_other_values_the_form_has_no_widget_for_are_kept(tmp_path, open_editor):
+    section = {"sex": ["Female", "hermaphrodite"],
+               "protocol": {"name": "P", "x_doi": "10.1/x"},
+               "factors": {"Genotype": {"kind": "strain"}}}
+    member = recording(tmp_path / "M1", about=section)
+    window = open_editor(member)
+    tab = window._about_tab
+
+    assert tab.sex_checks["female"].isChecked()
+    assert "hermaphrodite" in tab.other_sex_label.text()
+    assert tab.kinds() == {"Genotype": "strain"}             # shown as the file has it
+    tab.sex_checks["male"].setChecked(True)
+
+    assert window._dump_config()[KEY] == {
+        "sex": ["female", "male", "hermaphrodite"],
+        "protocol": {"name": "P", "x_doi": "10.1/x"},
+        "factors": {"Genotype": {"kind": "strain"}}}
+
+
+def test_opening_a_second_file_never_keeps_the_first_files_description(
+        tmp_path, open_editor):
+    first = recording(tmp_path / "First", about=full_about())
+    second = recording(tmp_path / "Second")
+    window = open_editor(first)
+    window._about_tab.meaning_edit("Genotype", "Ctrl").setText("typed, never saved")
+
+    window._load_path(second / "tracking_config.yaml")
+
+    tab = window._about_tab
+    assert tab.title.text() == "" and tab.notes.toPlainText() == ""
+    assert tab.run_value.isHidden() and tab.kinds() == {"Genotype": ""}
+    assert set(tab.meanings().values()) == {""}
+    assert KEY not in window._dump_config() and not is_dirty(window)
+
+
+# ---- Start from another recording… (A6) ------------------------------------
+
+MINE = {"run": "R-20261122-test-02", "title": "Replicate 2", "purpose": "Mine.",
+        "notes": "My notes.", "experimenter": "someone", "organism": "D. simulans",
+        "x_mine": True}
+
+
+def test_a6_starting_from_an_earlier_recording_fills_the_shared_part_only(
+        tmp_path, open_editor):
+    earlier = recording(tmp_path / "Rep1", about=full_about())
+    member = recording(tmp_path / "Rep2", about=copy.deepcopy(MINE))
+    window = open_editor(member)
+    tab = window._about_tab
+
+    assert tab.start_from_file(earlier / "tracking_config.yaml")
+
+    ## Filled in: who ran it, the series, the flies, the protocol, the factors.
+    assert tab.experimenter.text() == "atester"
+    assert tab.series.text() == "valence-mbon10-2026"
+    assert tab.organism.text() == "Drosophila melanogaster"
+    assert tab.sex_checks["female"].isChecked()
+    assert tab.age_at_start.text() == "5-7 days"
+    assert tab.protocol_edits["link"].text() == "https://example.org/valence"
+    assert tab.kinds() == {"Genotype": "genotype"}
+    assert tab.meanings()[("Genotype", "Ctrl")] == "w1118 > UAS-GtACR1"
+    ## Left as they were: what is this recording's alone.
+    assert tab.title.text() == "Replicate 2"
+    assert tab.purpose.toPlainText() == "Mine."
+    assert tab.notes.toPlainText() == "My notes."
+    assert tab.run_value.text() == "R-20261122-test-02"
+
+    started = window._dump_config()[KEY]
+    for key in about_mod.SHARED_KEYS:
+        assert started[key] == FULL[key], key                # mapping keys and all
+    assert {key: started[key] for key in ("run", "title", "purpose", "notes", "x_mine")} \
+        == {key: MINE[key] for key in ("run", "title", "purpose", "notes", "x_mine")}
+    assert "x_lab" not in started                            # the earlier one's own
+    assert "Rep1" in tab.start_note.text()
+    assert read_config(earlier)[KEY] == FULL                 # only ever read
+    assert is_dirty(window)                                  # nothing is saved until Save
+
+
+def test_a6_the_button_asks_for_a_config_and_starts_from_it(
+        tmp_path, open_editor, monkeypatch):
+    from PyQt6.QtWidgets import QFileDialog
+
+    earlier = recording(tmp_path / "Rep1", about=full_about())
+    member = recording(tmp_path / "Rep2")
+    window = open_editor(member)
+    asked = []
+
+    def choose(_parent, caption, start, _filter):
+        asked.append((caption, start))
+        return str(earlier / "tracking_config.yaml"), ""
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(choose))
+    window._about_tab.start_button.click()
+
+    [(caption, start)] = asked
+    assert "another recording" in caption
+    assert start == str(tmp_path)                            # beside this recording's folder
+    assert window._dump_config()[KEY] == SHARED
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                        staticmethod(lambda *a, **k: ("", "")))
+    window._about_tab.start_button.click()                   # cancelled: nothing changes
+    assert window._dump_config()[KEY] == SHARED
+
+
+def test_a6_only_the_factors_and_levels_this_config_declares_are_taken(
+        tmp_path, open_editor):
+    section = full_about()
+    section["factors"]["Sex"] = {"kind": "sex", "levels": {"Female": "virgin"}}
+    earlier = recording(tmp_path / "Rep1", about=section)
+    member = recording(tmp_path / "Rep2", extra_global={
+        "experimental_design_factors": {"Genotype": ["Ctrl", "Rescue"]}})
+    window = open_editor(member)
+
+    assert window._about_tab.start_from_file(earlier / "tracking_config.yaml")
+
+    assert window._dump_config()[KEY]["factors"] == {"Genotype": {
+        "kind": "genotype",
+        "levels": {"Ctrl": FULL["factors"]["Genotype"]["levels"]["Ctrl"]}}}
+    assert config_validation.config_warnings(window._dump_config()) == []
+
+
+def test_a6_a_field_the_earlier_recording_lacks_keeps_this_recordings(
+        tmp_path, open_editor):
+    earlier = recording(tmp_path / "Rep1", about={"series": "theirs", "title": "Theirs"})
+    member = recording(tmp_path / "Rep2", about=copy.deepcopy(MINE))
+    window = open_editor(member)
+
+    assert window._about_tab.start_from_file(earlier / "tracking_config.yaml")
+    assert window._dump_config()[KEY] == {**MINE, "series": "theirs"}
+
+
+@pytest.mark.parametrize("earlier_about, said", [
+    (None, "nothing to start from"),
+    ({"title": "Only its own", "notes": "Only its own."}, "nothing to start from"),
+    ("just some text", "nothing to start from"),
+], ids=["no section", "nothing shared", "not a mapping"])
+def test_a6_a_recording_with_nothing_to_share_changes_nothing(
+        tmp_path, open_editor, earlier_about, said):
+    earlier = recording(tmp_path / "Rep1", about=earlier_about)
+    member = recording(tmp_path / "Rep2", about=copy.deepcopy(MINE))
+    window = open_editor(member)
+
+    assert not window._about_tab.start_from_file(earlier / "tracking_config.yaml")
+    assert said in window._about_tab.start_note.text()
+    assert window._dump_config()[KEY] == MINE and not is_dirty(window)
+
+
+def test_a6_this_recordings_own_config_and_an_unreadable_one_are_refused(
+        tmp_path, open_editor):
+    member = recording(tmp_path / "Rep2", about=copy.deepcopy(MINE))
+    window = open_editor(member)
+    tab = window._about_tab
+
+    assert not tab.start_from_file(member / "tracking_config.yaml")
+    assert "own config" in tab.start_note.text()
+
+    broken = tmp_path / "Broken" / "tracking_config.yaml"
+    broken.parent.mkdir()
+    broken.write_text("global: [oops\n", encoding="utf-8")
+    assert not tab.start_from_file(broken)
+    assert "Could not read" in tab.start_note.text()
+    assert not tab.start_from_file(tmp_path / "Missing" / "tracking_config.yaml")
+    assert "Could not read" in tab.start_note.text()
+    assert window._dump_config()[KEY] == MINE

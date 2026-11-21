@@ -2,9 +2,15 @@
 
 Wraps the form-based tab widgets (:mod:`._config_tabs`) in a pyflic-style
 chrome: :class:`TopBar` with Open/Save/Save-As and a theme toggle, a
-three-tab :class:`QTabWidget` hosted inside :class:`Card` panels, and a
+four-tab :class:`QTabWidget` hosted inside :class:`Card` panels, and a
 live YAML-preview Card at the bottom.  The Script Editor (Phase 4) opens
 from the File menu / toolbar as a non-modal child window.
+
+The fourth tab, About, edits the optional ``about:`` section — what the
+recording is, which no analysis reads (ADR-0019).  It is also why
+``pytrack-config <folder>`` is where a recording is described before any
+Project exists: the editor opens on a folder with no config yet and writes
+one, without loading the recording or creating anything else in the folder.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .. import about as about_mod
 from .. import config_validation
 from .. import experiment_types as _et
 from .. import project as project_mod
@@ -50,7 +57,7 @@ from ..ui import (
     resolved_mode,
 )
 from ..ui import settings as ui_settings
-from ._config_tabs import CountingRegionsTab, GlobalTab, TrackingRegionsTab
+from ._config_tabs import AboutTab, CountingRegionsTab, GlobalTab, TrackingRegionsTab
 
 
 class ConfigEditorWindow(QMainWindow):
@@ -89,6 +96,7 @@ class ConfigEditorWindow(QMainWindow):
             # cwd/package fallback below would silently open an unrelated
             # config — and then save the user's edits over that file.
             self._current_path = candidate
+            self._about_tab.set_location(candidate)
             self._set_title(candidate)
             return
 
@@ -187,7 +195,8 @@ class ConfigEditorWindow(QMainWindow):
         tabs_card = Card(
             "Configuration",
             category=Category.NEUTRAL,
-            subtitle="Edit the global settings, tracking regions, and counting regions.",
+            subtitle="Edit the global settings, tracking regions, and counting "
+                     "regions, and say what the recording is.",
             icon_name="config",
         )
         tabs_card.add_title_widget(
@@ -197,9 +206,11 @@ class ConfigEditorWindow(QMainWindow):
         self._global_tab = GlobalTab()
         self._tracking_tab = TrackingRegionsTab(self._global_tab)
         self._counting_tab = CountingRegionsTab()
+        self._about_tab = AboutTab(self._global_tab)
         self._tabs.addTab(self._global_tab, "Global")
         self._tabs.addTab(self._tracking_tab, "Tracking regions")
         self._tabs.addTab(self._counting_tab, "Counting regions")
+        self._tabs.addTab(self._about_tab, "About")
         # When the user picks a typed Experiment Type, offer to seed its required
         # counting regions (never deleting existing ones).
         self._global_tab.experimentTypeChanged.connect(self._maybe_seed_required_regions)
@@ -296,11 +307,14 @@ class ConfigEditorWindow(QMainWindow):
         experiment_dir = path.parent
         self._tracking_tab.set_regions_source(
             lambda: project_mod.tracking_regions_in_data(experiment_dir))
+        self._about_tab.set_location(path)
         self._loading = True
         try:
             self._global_tab.load(config)
             self._tracking_tab.load(config)
             self._counting_tab.load(config)
+            ## Last: its level rows follow the factors the Global tab now holds.
+            self._about_tab.load(config)
         finally:
             self._loading = False
         # A freshly opened project with no regions yet gets them laid out
@@ -335,6 +349,7 @@ class ConfigEditorWindow(QMainWindow):
         if path:
             self._write(Path(path))
             self._current_path = Path(path)
+            self._about_tab.set_location(self._current_path)
             self._set_title(self._current_path)
 
     def _maybe_seed_required_regions(self) -> None:
@@ -516,7 +531,27 @@ class ConfigEditorWindow(QMainWindow):
                     config[key] = value
                 else:
                     config.pop(key, None)
-        return config
+        return self._with_about(config)
+
+    def _with_about(self, config: dict) -> dict:
+        """*config* with the About tab's ``about:`` (ADR-0019): none when
+        the form is blank, and the file's own value, untouched, while nobody
+        has edited it. A config that never had one stays without it."""
+        key = about_mod.ABOUT_KEY
+        dumped = self._about_tab.dump()
+        if key not in dumped:
+            config.pop(key, None)
+            return config
+        if key in config:
+            config[key] = dumped[key]          # where the file already has it
+            return config
+        ## New to this file: first, so what the recording is reads before how
+        ## it is analysed — after data_folder: when the file leads with one.
+        lead = [name for name in list(config)[:1]
+                if name == config_validation.DATA_FOLDER_KEY]
+        return {**{name: config[name] for name in lead}, key: dumped[key],
+                **{name: value for name, value in config.items()
+                   if name not in lead}}
 
     # ==================================================================
     # Dirty indicator
@@ -609,7 +644,8 @@ class ConfigEditorWindow(QMainWindow):
 
     # Top-level sections this window renders and therefore owns; everything
     # else in the document belongs to whoever wrote it.
-    _OWNED_SECTIONS = ("global", "tracking_regions", "counting_regions")
+    _OWNED_SECTIONS = ("global", "tracking_regions", "counting_regions",
+                       about_mod.ABOUT_KEY)
 
     def _reload_external_changes(self, path: str = "") -> None:
         """Re-read the sections this window does not own after a child wrote the file."""
