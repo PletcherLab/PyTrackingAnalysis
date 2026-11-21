@@ -318,9 +318,9 @@ def strings_in(value):
 
 def written_text(directory) -> dict:
     """The text of every table, note and manifest under *directory*'s
-    ``analysis/`` and ``qc/``."""
+    ``analysis/`` and ``qc/`` (a Project has no ``qc/``)."""
     return {path.name: path.read_text(encoding="utf-8", errors="replace")
-            for folder in ("analysis", "qc")
+            for folder in ("analysis", "qc") if (directory / folder).is_dir()
             for path in sorted((directory / folder).iterdir())
             if path.suffix in (".csv", ".txt", ".json", ".md")}
 
@@ -642,3 +642,122 @@ def test_t4_the_hub_says_what_of_the_section_stayed_behind(qapp, tmp_path, monke
         qapp, tmp_path, monkeypatch, valence_config(about=full_about()))
     assert "about:" in log and "RepA" in log
     assert "title" in log and "run:" in log
+
+
+# ---------------------------------------------------------------------------
+# T5: a Project says when its replicates describe one level differently
+# ---------------------------------------------------------------------------
+
+def tracker_study(root, abouts: dict):
+    """A Project at *root* of complete synthetic recordings, one per name in
+    *abouts*, each with that ``about:`` (none for ``None``)."""
+    for name, section in abouts.items():
+        recording(root / name, about=section)
+    prj.create_project_file(str(root))
+    return prj.Project(str(root))
+
+
+def two_meanings() -> dict:
+    """Two replicates that give ``Treated`` different meanings."""
+    second = full_about()
+    second["factors"]["Genotype"]["levels"]["Treated"] = "Canton-S"
+    return {"Rep1": full_about(), "Rep2": second}
+
+
+def test_t5_one_level_described_two_ways_is_one_warning_naming_both(tmp_path):
+    project = tracker_study(tmp_path / "Study", two_meanings())
+
+    assert project.experiment_names == ["Rep1", "Rep2"]         # it loads
+    [warning] = project.about_warnings
+    assert "Rep1" in warning and "Rep2" in warning
+    assert "Genotype" in warning and "Treated" in warning
+    assert "R12C11-GAL4 > UAS-GtACR1" in warning and "Canton-S" in warning
+    ## In this package's words: a Member is a Project of a Batch here.
+    assert "replicates" in warning and "members" not in warning.lower()
+
+
+def test_t5_replicates_that_agree_or_say_nothing_are_no_warning(tmp_path):
+    project = tracker_study(tmp_path / "Study", {
+        "Rep1": full_about(), "Rep2": full_about(), "Rep3": None,
+        "Rep4": {"title": "Says nothing of the factors"}, "Rep5": "not a mapping"})
+    assert project.about_warnings == []
+    assert tracker_study(tmp_path / "Plain", {"A": None, "B": None}).about_warnings == []
+
+
+def test_t5_one_factor_given_two_kinds_is_a_warning_too(tmp_path):
+    second = full_about()
+    second["factors"]["Genotype"]["kind"] = "treatment"
+    project = tracker_study(tmp_path / "Study", {"Rep1": full_about(), "Rep2": second})
+
+    [warning] = project.about_warnings
+    assert "kinds" in warning and "genotype" in warning and "treatment" in warning
+    assert "Rep1" in warning and "Rep2" in warning
+
+
+def test_t5_the_warning_never_reaches_a_report_or_the_statistics(tmp_path):
+    """The Project's other warnings are printed in the Combined Analysis
+    statistics and on the Project Report, and the report is what an AI
+    provider is sent. Nothing of ``about:`` goes there, so this one is kept
+    apart."""
+    from pytrackinganalysis.ai.payload import build_payload
+
+    first, second = marked_about(), marked_about()
+    second["factors"]["Genotype"]["levels"]["Treated"] = f"{MARK} another cross"
+    project = tracker_study(tmp_path / "Study", {"Rep1": first, "Rep2": second})
+
+    [warning] = project.about_warnings
+    assert MARK in warning
+    assert not any("about" in line for line in project.warnings)
+
+    assert project.run_all(make_reports=False, log=lambda _line: None) == []
+    project.build_combined_analysis()
+    report = "\n".join(strings_in(project.build_report_model()))
+    assert "Rep1" in report and "Genotype" in report         # the walk reads the report
+    assert MARK not in report
+    assert MARK not in build_payload(project).text
+    for name, text in written_text(tmp_path / "Study").items():
+        assert MARK not in text, name
+    assert "Study_Stats.txt" in written_text(tmp_path / "Study")
+
+
+def test_t5_the_hub_shows_it_with_the_projects_other_notes(qapp, tmp_path):
+    from pytrackinganalysis.apps.hub import HubWindow
+
+    tracker_study(tmp_path / "Study", two_meanings())
+    win = HubWindow(initial_project=str(tmp_path / "Study"))
+    qapp.processEvents()
+    try:
+        shown = win._projectview_summary.text()
+        assert "Note: about: replicates describe Genotype" in shown
+        assert "Rep1" in shown and "Rep2" in shown
+        ## A cross is written with > and may hold <: escaped, not markup.
+        assert "R12C11-GAL4 &gt; UAS-GtACR1" in shown
+    finally:
+        win.close()
+
+
+def test_t5_validate_yamls_reports_it_as_a_note_not_a_problem(qapp, tmp_path):
+    from pytrackinganalysis.apps.hub import HubWindow
+
+    tracker_study(tmp_path / "Study", two_meanings())
+    win = HubWindow(initial_project=str(tmp_path / "Study"))
+    qapp.processEvents()
+    try:
+        win._validate_yaml()
+        said = win._log.toPlainText()
+        assert "note: about: replicates describe Genotype" in said
+        assert "3 file(s) checked, 0 problem(s) found." in said
+        assert "about:" not in win._err_log.toPlainText()
+    finally:
+        win.close()
+
+
+def test_t5_the_validate_design_step_logs_it(tmp_path):
+    from pytrackinganalysis.script_editor import project_actions
+
+    project = tracker_study(tmp_path / "Study", two_meanings())
+    logged: list[str] = []
+    ctx = project_actions.ProjectRunContext(project=project, log=logged.append)
+    project_actions._exec_validate_design({}, ctx)
+    assert any(line.startswith("Note: about: replicates describe Genotype")
+               for line in logged)

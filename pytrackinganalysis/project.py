@@ -368,6 +368,24 @@ class Project:
             if location.problem:
                 self.warnings.append(f"{name}: {location.problem}")
         self._validate_design_match()
+        #: Where replicates describe one factor level, or one factor's kind,
+        #: differently in ``about:`` — worth knowing, because the Combined
+        #: Analysis pools levels by name (ADR-0019). Never an error, and
+        #: kept apart from :attr:`warnings`: those are printed in the
+        #: Combined Analysis statistics and on the Project Report, and
+        #: nothing of ``about:`` goes on a report, nor from there to an AI
+        #: provider. The Hub, Validate YAMLs and ``validate_design`` show both.
+        self.about_warnings: list[str] = self._about_spread()
+
+    def _about_spread(self) -> list[str]:
+        from . import about as about_mod
+
+        abouts = {name: about_mod.read_about(self.configs[name])
+                  for name in self.experiment_names}
+        ## The mirrored module speaks pyflic's language, where a replicate is
+        ## a Member; here a Member is a Project of a Batch (CONTEXT.md).
+        return [line.replace("about: members ", "about: replicates ", 1)
+                for line in about_mod.meaning_spread(abouts)]
 
     def find_script(self, name: str) -> dict | None:
         for script in self.scripts:

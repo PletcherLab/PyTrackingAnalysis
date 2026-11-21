@@ -11,6 +11,7 @@ card-by-card breakdown.
 
 from __future__ import annotations
 
+import html
 import os
 import re
 import shutil
@@ -1012,6 +1013,10 @@ class HubWindow(QMainWindow):
                 f"{', '.join(pending)} — 'Experiment configs…' creates them.</i>")
         for warning in project.warnings:
             lines.append(f"<i>Note: {warning}</i>")
+        ## about: is a person's own words, and a cross is written with > and
+        ## sometimes <: escaped, so it is shown and never read as markup.
+        for warning in project.about_warnings:
+            lines.append(f"<i>Note: {html.escape(warning)}</i>")
         self._projectview_summary.setText("<br>".join(lines))
         self._refresh_project_report_button(project)
 
@@ -3676,9 +3681,10 @@ class HubWindow(QMainWindow):
         total = 0
         for path in targets:
             if path.name == prj.PROJECT_FILENAME:
-                problems = self._validate_project_file(path)
+                problems, notes = self._validate_project_file(path)
             else:
                 problems = validate_config_file(str(path))
+                notes = config_file_warnings(str(path))
             total += len(problems)
             if problems:
                 self._log_issue(
@@ -3688,10 +3694,10 @@ class HubWindow(QMainWindow):
             else:
                 self._log.append_line(f"[validate] {path} is valid.")
             ## Advice that is not a problem: an absolute data_folder: works,
-            ## it is just not portable (ADR-0018).
-            if path.name != prj.PROJECT_FILENAME:
-                for warning in config_file_warnings(str(path)):
-                    self._log.append_line(f"[validate]   note: {warning}")
+            ## it is just not portable (ADR-0018), and nothing in about: is
+            ## ever more than a note (ADR-0019).
+            for warning in notes:
+                self._log.append_line(f"[validate]   note: {warning}")
         summary = (f"[validate] {len(targets)} file(s) checked, "
                    f"{total} problem(s) found.")
         if total:
@@ -3699,10 +3705,12 @@ class HubWindow(QMainWindow):
         else:
             self._log.append_line(summary)
 
-    def _validate_project_file(self, path: Path) -> list[str]:
-        """Problems in a ``project.yaml``: it parses, and the Project it
-        describes actually loads — which is where design mismatches between
-        replicates surface."""
+    def _validate_project_file(self, path: Path) -> tuple[list[str], list[str]]:
+        """Problems in a ``project.yaml``, and notes that are not problems:
+        it parses, and the Project it describes actually loads — which is
+        where design mismatches between replicates surface. The notes are
+        where its replicates describe one level differently in ``about:``
+        (ADR-0019)."""
         import yaml
 
         from .. import project as prj
@@ -3711,12 +3719,12 @@ class HubWindow(QMainWindow):
             with open(path, encoding="utf-8") as handle:
                 data = yaml.safe_load(handle)
         except yaml.YAMLError as err:
-            return [f"YAML syntax error: {err}"]
+            return [f"YAML syntax error: {err}"], []
         except OSError as err:
-            return [f"Could not read the file: {err}"]
+            return [f"Could not read the file: {err}"], []
         if data is not None and not isinstance(data, dict):
             return ["project.yaml must be a mapping "
-                    f"(found {type(data).__name__})."]
+                    f"(found {type(data).__name__})."], []
 
         problems: list[str] = []
         try:
@@ -3724,7 +3732,7 @@ class HubWindow(QMainWindow):
         except Exception as err:  # noqa: BLE001
             ## A Project that will not load is the loudest problem this file
             ## can have — a design mismatch raises exactly here.
-            return [f"{type(err).__name__}: {err}"]
+            return [f"{type(err).__name__}: {err}"], []
         problems.extend(project.warnings)
         from ..script_editor.project_actions import project_validation_issues
         from ..script_editor.runner import ScriptError, load_scripts
@@ -3744,7 +3752,7 @@ class HubWindow(QMainWindow):
                     problems.append(
                         f"script '{script.get('name')}' step {index + 1}: "
                         f"{issue}")
-        return problems
+        return problems, list(project.about_warnings)
 
     def _clear_mpl_cache(self) -> None:
         """Drop matplotlib's cache directory.

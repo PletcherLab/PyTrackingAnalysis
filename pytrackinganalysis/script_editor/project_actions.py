@@ -50,7 +50,7 @@ def _exec_validate_design(_params: dict, ctx: ProjectRunContext) -> None:
     project = Project(ctx.project.project_directory)  # raises on mismatch
     ctx.log(f"Design OK: {len(project.experiment_names)} replicate(s) "
             f"({', '.join(project.experiment_names) or 'none yet'}).")
-    for warning in project.warnings:
+    for warning in (*project.warnings, *project.about_warnings):
         ctx.log(f"Note: {warning}")
 
 
