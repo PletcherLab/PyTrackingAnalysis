@@ -1976,6 +1976,19 @@ class AboutTab(QWidget):
         self._at_load = self.section()
         self.start_note.setText("")
 
+    def note_saved(self, config: dict) -> None:
+        """*config* was just written: its ``about:`` is now the file's own,
+        and what "untouched" means from here on. The form is left as it is."""
+        self._harvest()
+        self._raw = config.get(about_mod.ABOUT_KEY, _NO_ABOUT)
+        self._base = copy.deepcopy(about_mod.read_about(config))
+        ## What is still in the section without a row was never this tab's;
+        ## what had a row and was dropped is not in the section any more.
+        self._shown_factors = set(self._factors)
+        self._shown_levels = {(name, level) for name, levels in self._factors.items()
+                              for level in levels}
+        self._at_load = self.section()
+
     def _fill(self) -> None:
         """Set every widget from :attr:`_base`."""
         section = self._base

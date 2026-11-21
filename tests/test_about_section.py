@@ -1050,6 +1050,25 @@ def test_a3_the_config_editor_keeps_the_section_through_other_edits(
     assert "T_9" in saved["tracking_regions"]
 
 
+def test_after_a_save_untouched_means_as_last_saved(tmp_path, open_editor):
+    """Once the section has been rewritten, the file as it was before that
+    save is history: going back to the old title must not bring back the
+    old spelling, or the odd value the rewrite left out."""
+    member = recording(tmp_path / "M1", about={"title": "T", "sex": "Female",
+                                               "protocol": 3})
+    window = open_editor(member)
+    tab = window._about_tab
+
+    tab.title.setText("T2")
+    window._save()
+    assert read_config(member)[KEY] == {"title": "T2", "sex": ["female"]}
+
+    tab.title.setText("T")
+    assert window._dump_config()[KEY] == {"title": "T", "sex": ["female"]}
+    tab.title.setText("T2")
+    assert not is_dirty(window)
+
+
 # ---- factors and levels (T3) ------------------------------------------------
 
 def rename_levels(window, text, row=0) -> None:
@@ -1564,3 +1583,48 @@ def test_a5_a_rewrite_hidden_behind_the_script_editors_save_still_asks(
     assert len(disk_change.asked) == 1
     assert read_config(member)[KEY] == on_disk
     assert read_config(member)["scripts"] == [SCRIPT]
+
+
+# ---------------------------------------------------------------------------
+# A lone folder: describing a recording before any Project exists
+# ---------------------------------------------------------------------------
+
+def test_a_folder_with_a_recording_and_no_config_can_be_described(
+        tmp_path, open_editor, dialogs, disk_change):
+    """``pytrack-config <folder>`` is the way in: the Hub opens Projects."""
+    folder = recording(tmp_path / "20261121_valence_rep1")
+    (folder / "tracking_config.yaml").unlink()               # a recording, no config yet
+    window = open_editor(folder)
+    tab = window._about_tab
+
+    assert window._current_path == folder / "tracking_config.yaml"
+    tab.title.setText("Light preference, MBON10 silenced, replicate 1")
+    tab.purpose.setPlainText("Whether silencing MBON10 changes the preference for light.")
+    tab.experimenter.setText("atester")
+    tab.sex_checks["female"].setChecked(True)
+    window._save()
+
+    assert dialogs["information"] and not dialogs["warning"] and not dialogs["critical"]
+    assert disk_change.asked == []
+    config = read_config(folder)
+    assert list(config)[0] == KEY
+    assert config[KEY] == {
+        "title": "Light preference, MBON10 silenced, replicate 1",
+        "purpose": "Whether silencing MBON10 changes the preference for light.",
+        "experimenter": "atester", "sex": ["female"]}
+    ## Describing a folder reads no recording and makes nothing but the config.
+    assert sorted(entry.name for entry in folder.iterdir()) == \
+        ["data", "tracking_config.yaml"]
+
+    ## The design can follow, in the same window: its level rows appear here.
+    from PyQt6.QtWidgets import QTableWidgetItem
+    table = window._global_tab.factors_table
+    table.insertRow(0)
+    table.setItem(0, 0, QTableWidgetItem("Genotype"))
+    table.setItem(0, 1, QTableWidgetItem("Ctrl, Treated"))
+    tab.meaning_edit("Genotype", "Ctrl").setText("w1118 > UAS-GtACR1")
+    window._save()
+    saved = read_config(folder)
+    assert saved[KEY]["factors"] == {"Genotype": {"levels": {"Ctrl": "w1118 > UAS-GtACR1"}}}
+    assert saved["global"]["experimental_design_factors"] == FACTORS
+    assert disk_change.asked == []

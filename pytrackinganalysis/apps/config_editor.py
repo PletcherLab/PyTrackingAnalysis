@@ -492,6 +492,7 @@ class ConfigEditorWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Could not save file:\n{err}")
             return False
         self._remember_as_read(path, self._text_on_disk(path))
+        self._about_tab.note_saved(config)
         self._disk_text = yaml.safe_dump(config, default_flow_style=False, sort_keys=False)
         self._refresh_dirty()
         message = f"Config saved to:\n{path}"
