@@ -525,3 +525,18 @@ def test_an_atomic_write_keeps_the_files_permissions(tmp_path):
         assert shared.read_text() == "a: 1\n"
     finally:
         os.umask(mask)
+
+
+def test_plot_labels_never_merge_two_treatments():
+    """Every factor was cut to three letters before seaborn grouped by the
+    label, so 'Yeast 1%' and 'Yeast 5%' were drawn as one strip with one
+    pooled mean line."""
+    df = pd.DataFrame({"Treatment": ["Yeast 1%", "Yeast 5%", "Yeast 1%"],
+                       "FinalPI": [0.1, 0.9, 0.2]})
+    out = ArenaMod.Arena._abbrev_df(None, df)
+    assert out["Treatment"].nunique() == 2
+    assert list(df["Treatment"]) == ["Yeast 1%", "Yeast 5%", "Yeast 1%"]
+
+    short = ArenaMod.Arena._abbrev_df(
+        None, pd.DataFrame({"Treatment": ["Control, Female", "Mutant, Male"]}))
+    assert list(short["Treatment"]) == ["Con, Fem", "Mut, Mal"]

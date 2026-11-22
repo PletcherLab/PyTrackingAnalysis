@@ -115,9 +115,15 @@ class Arena:
         return summary[keep].reset_index(drop=True)
 
     def _abbrev_df(self, df):
-        """Return a copy of df with the Treatment column abbreviated for plot labels."""
+        """Return a copy of df with the Treatment column abbreviated for plot labels.
+
+        Only when every treatment keeps a label of its own: the plots group
+        by this label, so two treatments sharing their first three letters
+        per factor ('Yeast 1%', 'Yeast 5%') were drawn as one."""
         out = df.copy()
-        out['Treatment'] = out['Treatment'].map(_abbrev_treatment)
+        labels = {t: _abbrev_treatment(t) for t in out['Treatment'].dropna().unique()}
+        if len(set(labels.values())) == len(labels):
+            out['Treatment'] = out['Treatment'].map(_abbrev_treatment)
         return out
 
     def _facet_grid(self, the_data, **kwargs):
