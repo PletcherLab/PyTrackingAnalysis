@@ -21,7 +21,10 @@ back to every row from each rollback onwards — ``MSec``, ``Time`` and
 backward step plus one typical frame interval, then snapped to a whole number
 of hours when it is within :data:`HOUR_SNAP_TOLERANCE_MS` of one: a correction
 of exactly N hours is what a time-zone mismatch produces, and the snapped value
-is then exact rather than one frame-interval estimate away from it.
+is then exact rather than one frame-interval estimate away from it. It is
+never snapped below the backward step itself: a clock that went back more
+than the whole hours lost more than them, and the snapped value would leave
+it running backwards.
 
 The loader refuses an export with a rollback in it
 (:func:`raise_if_rolled_back`), naming the frames and pointing here. Repairing
@@ -178,8 +181,15 @@ def find_rollbacks(frames, msec, tolerance_ms: float = ROLLBACK_TOLERANCE_MS) ->
     step_ms = _typical_step_ms(msec)
     found = []
     for i in np.flatnonzero(np.diff(msec) < -tolerance_ms) + 1:
-        lost_ms = float(msec[i - 1] - msec[i]) + step_ms
+        drop_ms = float(msec[i - 1] - msec[i])
+        lost_ms = drop_ms + step_ms
         offset_ms, hours = snap_to_hours(lost_ms)
+        if offset_ms <= drop_ms:
+            ## The snap tolerance is wider than the detection tolerance: an
+            ## hour plus 1.5 s of drift, snapped to the hour, left a backward
+            ## step the loader still refused. A clock that went back MORE
+            ## than the whole hours lost more than them.
+            offset_ms, hours = lost_ms, None
         found.append(Rollback(
             frame=int(frames[i]), previous_frame=int(frames[i - 1]),
             msec_before=float(msec[i - 1]), msec_after=float(msec[i]),
@@ -316,18 +326,15 @@ def _line_terminator(path: Path) -> str:
     return "\r\n" if first.endswith(b"\r\n") else "\n"
 
 
-def rewrite_file(path: Path, offset: Callable[[int], float], *, msec_only: bool = False) -> int:
-    """Apply *offset* to the clock columns of one export file, in place.
-
-    Rows before the first rollback are written back byte-for-byte; only
-    ``MSec`` (and ``Time``/``Millisec`` unless *msec_only*) change on the rest.
-    Returns the number of rows shifted.
-    """
-    terminator = _line_terminator(path)
+def _shifted_rows(path: Path, offset: Callable[[int], float], *,
+                  msec_only: bool = False) -> tuple[list, int]:
+    """``(rows, shifted)``: one export file's rows with *offset* applied to
+    the clock columns, and how many rows changed. Reads only; raises on
+    anything the repair cannot shift."""
     with open(path, "r", newline="", encoding="utf-8") as handle:
         rows = list(csv.reader(handle))
     if not rows:
-        return 0
+        return rows, 0
     header = rows[0]
     try:
         frame_col = header.index("Frame")
@@ -353,12 +360,48 @@ def rewrite_file(path: Path, offset: Callable[[int], float], *, msec_only: bool 
                 stamps[key] = _shift_stamp(row[time_col], row[ms_col], add)
             row[time_col], row[ms_col] = stamps[key]
         shifted += 1
+    return rows, shifted
+
+
+def check_files(files: Sequence[Path], offset: Callable[[int], float], *,
+                msec_only: bool = False) -> None:
+    """Shift every file in memory and throw the result away: raises, before
+    anything is copied or written, on whatever :func:`rewrite_file` would
+    stop at part-way — a Time value it cannot parse, a file without
+    Frame/MSec, an empty cell. Otherwise the originals were already backed
+    up when it stopped, and the rerun its error suggests was refused."""
+    for path in files:
+        _shifted_rows(path, offset, msec_only=msec_only)
+
+
+def rewrite_file(path: Path, offset: Callable[[int], float], *, msec_only: bool = False) -> int:
+    """Apply *offset* to the clock columns of one export file, in place.
+
+    Rows before the first rollback are written back byte-for-byte; only
+    ``MSec`` (and ``Time``/``Millisec`` unless *msec_only*) change on the rest.
+    Returns the number of rows shifted.
+    """
+    terminator = _line_terminator(path)
+    rows, shifted = _shifted_rows(path, offset, msec_only=msec_only)
+    if not rows:
+        return 0
 
     def render(handle):
         csv.writer(handle, lineterminator=terminator).writerows(rows)
 
     atomic_write_text(path, render, newline="")
     return shifted
+
+
+def default_backup_dir(data_dir: Path) -> Path:
+    """``data_original/`` beside a ``data/`` folder; for an export lying
+    loose at an experiment's root (an Unfiled Recording), inside that root —
+    beside the export, never in the Project above it."""
+    from . import layout   # lazy: the trackers import this module
+
+    if data_dir.name.lower() == layout.DATA_DIRNAME:
+        return data_dir.parent / DEFAULT_BACKUP_DIRNAME
+    return data_dir / DEFAULT_BACKUP_DIRNAME
 
 
 def backup_originals(files: Sequence[Path], backup_dir: Path, report: RepairReport) -> None:
@@ -525,6 +568,7 @@ def repair_export(target, *, backup_dir=None, out_dir=None, dry_run: bool = Fals
         say("Dry run: no files changed.")
         return report
 
+    check_files(files, offset, msec_only=msec_only)
     if out_dir is not None:
         before = len(report.messages)
         write_repaired_copy(data_dir, out_dir, offset, report, msec_only=msec_only)
@@ -537,7 +581,7 @@ def repair_export(target, *, backup_dir=None, out_dir=None, dry_run: bool = Fals
             "untouched.")
         return report
 
-    backup_dir = Path(backup_dir) if backup_dir else data_dir.parent / DEFAULT_BACKUP_DIRNAME
+    backup_dir = Path(backup_dir) if backup_dir else default_backup_dir(data_dir)
     backup_originals(files, backup_dir, report)
     report.backup_dir = backup_dir
     say(f"Originals copied to {backup_dir}")

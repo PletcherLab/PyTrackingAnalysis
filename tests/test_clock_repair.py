@@ -106,6 +106,20 @@ def test_a_correction_that_is_not_whole_hours_keeps_the_measured_value():
     assert rollback.offset_ms == pytest.approx(lost)
 
 
+def test_snapping_never_leaves_the_clock_running_backwards():
+    """The snap tolerance (2 s) is wider than the detection tolerance (1 s).
+    A set-back of an hour plus 1.5 s of drift was snapped to exactly an hour,
+    left a 1.36 s backward step the loader still refused, and a second repair
+    then stopped at the backup the first one had made."""
+    frames, msec = clock(100, {40: HOUR_MS + 1_500 + STEP_MS})
+    [rollback] = find_rollbacks(frames, msec)
+    assert rollback.offset_ms >= rollback.msec_before - rollback.msec_after
+    corrected = msec + np.array(
+        [clock_repair.offset_for_frame([rollback])(int(f)) for f in frames])
+    assert find_rollbacks(frames, corrected) == []
+    assert np.all(np.diff(corrected) > 0)
+
+
 def test_snap_to_hours():
     assert snap_to_hours(2 * HOUR_MS + 500) == (2 * HOUR_MS, 2)
     assert snap_to_hours(HOUR_MS / 2) == (HOUR_MS / 2, None)
@@ -233,6 +247,40 @@ def test_msec_only_leaves_the_wall_clock_as_recorded(tmp_path):
     assert np.allclose(np.diff(after.query("TrackingRegion == 'T_0'")["MSec"]), STEP_MS)
     pd.testing.assert_series_equal(before["Time"], after["Time"])
     pd.testing.assert_series_equal(before["Millisec"], after["Millisec"])
+
+
+def test_a_rewrite_that_would_fail_changes_nothing(tmp_path):
+    """The originals were copied before any file was parsed, so a Time value
+    the repair cannot read left data_original/ behind, and the rerun the
+    error suggests (--msec-only) was refused because of it."""
+    files = write_export(tmp_path, n_frames=50, rollbacks={30: HOUR_MS}, frames_per_file=20)
+    text = files[-1].read_text()
+    files[-1].write_text(text.replace("7/29/2024", "2024.07.29"), newline="")
+    originals = {f.name: f.read_bytes() for f in files}
+
+    with pytest.raises(ValueError, match="--msec-only"):
+        repair_export(tmp_path, log=None)
+
+    assert not (tmp_path / "data_original").exists()
+    assert {f.name: f.read_bytes() for f in files} == originals
+    report = repair_export(tmp_path, msec_only=True, log=None)
+    assert report.backup_dir == tmp_path / "data_original"
+
+
+def test_an_unfiled_recording_keeps_its_originals_in_its_own_folder(tmp_path):
+    """An export loose at the experiment root made data_dir that root, and
+    the backup went to its parent — the Project folder — where the next
+    unfiled replicate's repair was then refused."""
+    experiment = tmp_path / "Proj" / "Rep1"
+    write_export(experiment, n_frames=50, rollbacks={30: HOUR_MS}, frames_per_file=20)
+    for path in (experiment / "data").iterdir():
+        path.rename(experiment / path.name)
+    (experiment / "data").rmdir()
+
+    report = repair_export(experiment, log=None)
+
+    assert report.backup_dir == experiment / "data_original"
+    assert not (tmp_path / "Proj" / "data_original").exists()
 
 
 def test_the_data_folder_itself_is_accepted(tmp_path):
