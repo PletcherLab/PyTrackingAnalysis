@@ -627,6 +627,17 @@ def normalize_member_key(value) -> str:
     return "/".join(parts)
 
 
+def fold_member_key(value) -> str:
+    """A Member key as the filesystem compares it: case-folded where the
+    filesystem is case-insensitive, with ``/`` separators throughout.
+
+    ``os.path.normcase`` alone is not enough: on Windows it also turns ``/``
+    into ``\\``, so a prefix test against ``key + "/"`` never matched and
+    every row of a scoped Removal Sheet was skipped there.
+    """
+    return os.path.normcase(normalize_member_key(value)).replace("\\", "/")
+
+
 def normalize_sheet_rows(rows) -> list:
     """Rewrite each row's ``project`` cell into a Member key.
 
@@ -650,13 +661,12 @@ def row_member_key(row, members) -> str:
     into a Member that was not running, so the row's full path is matched
     against the longest Member key that prefixes it.
     """
-    whole = normalize_member_key(
+    folded = fold_member_key(
         "/".join(part for part in (getattr(row, "project", ""),
                                    getattr(row, "experiment", "")) if part))
-    folded = os.path.normcase(whole)
     best = ""
     for key in members:
-        candidate = os.path.normcase(normalize_member_key(key))
+        candidate = fold_member_key(key)
         if (folded == candidate or folded.startswith(candidate + "/")) \
                 and len(candidate) > len(best):
             best = candidate
@@ -676,7 +686,7 @@ def scope_sheet_rows(rows, members) -> tuple[list, list]:
     ## normcase, because on Windows and macOS 'sept2026/proja' opens the same
     ## directory as 'Sept2026/ProjA': scoping a row out on the very filesystem
     ## where its path resolves would silently drop a declaration.
-    wanted = {os.path.normcase(normalize_member_key(m)) for m in members}
+    wanted = {fold_member_key(m) for m in members}
     keep, skip = [], []
     for row in rows:
         ## Matched on the row's whole path, not its project cell: the two
@@ -775,12 +785,14 @@ def run_batch(batch_dir, script_name: str | None = None,
     if project_names is None:
         targets = [member.key for member in members]
     else:
-        wanted = {os.path.normcase(normalize_member_key(n))
-                  for n in project_names}
+        wanted = {fold_member_key(n) for n in project_names}
         targets = [member.key for member in members
-                   if os.path.normcase(normalize_member_key(member.key))
-                   in wanted]
-        for missing in sorted(wanted - set(by_key)):
+                   if fold_member_key(member.key) in wanted]
+        ## Folded on both sides: on Windows the raw keys never equal the
+        ## folded ones, and every Project that did run was also logged as
+        ## not being in the Batch.
+        found_keys = {fold_member_key(key) for key in by_key}
+        for missing in sorted(wanted - found_keys):
             ## An API caller's stale key must not vanish silently — the Hub
             ## table only offers real Members, so this is for scripts.
             log(f"[{missing}] not a Project in this Batch — ignored")

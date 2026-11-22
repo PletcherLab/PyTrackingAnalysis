@@ -851,3 +851,22 @@ def test_a_stray_config_at_the_batch_root_does_not_empty_the_batch(tmp_path):
 
     assert batch_mod.is_batch_dir(tmp_path)
     assert keys(tmp_path) == ["ProjTop", "Sept2026/ProjA"]
+
+
+def test_sheet_scoping_holds_on_windows_where_normcase_turns_slashes(monkeypatch):
+    """On Windows os.path.normcase lowercases AND turns '/' into '\\', so a
+    row's 'projb\\rep1' never started with the Member 'projb' + '/': every
+    row of a scoped Removal Sheet was skipped, and the removed flies stayed
+    in the analysis."""
+    import ntpath
+
+    from pytrackinganalysis.removals import SheetRow
+
+    monkeypatch.setattr(os.path, "normcase", ntpath.normcase)
+    rows = [SheetRow(2, "ProjA", "Rep1", "T_1", "dead"),
+            SheetRow(3, "Sept2026", "ProjB/Rep2", "T_2", "escaped"),
+            SheetRow(4, "Other", "Rep1", "T_1", "dead")]
+    keep, skip = batch_mod.scope_sheet_rows(
+        rows, ["ProjA", "Sept2026\\ProjB"])
+    assert [row.index for row in keep] == [2, 3]
+    assert [row.index for row in skip] == [4]
