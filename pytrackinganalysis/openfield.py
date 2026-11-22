@@ -386,14 +386,19 @@ def fly_measures(data, geometry, parameters):
     *data* is the window of a tracker's frames (``Tracker.get_data_subset``),
     carrying ``Xpos_mm``/``Ypos_mm`` (relative to the ROI centre),
     ``DataQuality``, ``IsWalking``, ``Speed_mm_sec``, ``DeltaSec``, ``Minutes``
-    and ``Heading``. Without an arena geometry or any frames every measure is
-    NA — visibly missing, never a misleading zero.
+    and ``Heading``. Without an arena geometry, any frames or any tracked
+    (High-quality) frame every measure is NA — visibly missing, never a
+    misleading zero.
     """
     out = pd.Series(np.nan, index=list(FLY_MEASURES), dtype=float)
     if data is None or len(data) == 0:
         return out
     minutes = data["Minutes"].to_numpy(dtype=float)
     valid = (data["DataQuality"] == "High").to_numpy()
+    if not valid.any():
+        ## Nothing was seen: coverage and the bout rate used to read 0.0
+        ## here, and a Pair's value is the mean of its two flies.
+        return out
     walking = data["IsWalking"].fillna(False).to_numpy(dtype=bool)
     observed = float(minutes[-1] - minutes[0])
     for key, value in walking_measures(

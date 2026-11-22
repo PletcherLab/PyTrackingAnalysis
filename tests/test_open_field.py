@@ -190,3 +190,25 @@ def test_terminal_spread_separates_still_from_moving():
     lost = of.terminal_spread(np.zeros(minutes.size), np.zeros(minutes.size),
                               minutes < 30, minutes)
     assert np.isnan(lost)
+
+
+def test_a_window_with_no_tracked_frame_measures_nothing():
+    """Frames, but not one High-quality frame: coverage and the walking-bout
+    rate came out 0.0 where every other measure was NA — and a Pair's
+    ExplorationAUC is the mean of its two flies, so the 0 halved the
+    partner's value."""
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    geometry = of.ArenaGeometry("Rectangle", 10.0, 10.0, 1.0)
+    m = 100
+    data = pd.DataFrame({
+        "Minutes": np.arange(m) / 600.0, "DataQuality": ["NotFound"] * m,
+        "IsWalking": [False] * m, "Speed_mm_sec": [0.0] * m,
+        "DeltaSec": [0.1] * m, "Xpos_mm": [0.0] * m, "Ypos_mm": [0.0] * m,
+        "Heading": [0.0] * m})
+    parameters = SimpleNamespace(wall_zone_mm=2.0, fly_length_mm=2.5,
+                                 fly_width_mm=1.0)
+    out = of.fly_measures(data, geometry, parameters)
+    assert out.isna().all(), out[out.notna()].to_dict()
