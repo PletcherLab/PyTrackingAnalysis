@@ -118,6 +118,12 @@ class Tracker:
         deltax.iat[0]=0
         deltay.iat[0]=0
         self.rawdata['Dist_mm'] = (deltax**2 + deltay**2)**0.5
+        ## Whether the step arriving at a row has a lost frame at either end,
+        ## worked out over the whole recording: a window's first row carries
+        ## the step from the row before the window, which the window itself
+        ## cannot see (TotalDistanceHighQualityOnly).
+        lost = self.rawdata['DataQuality'] != 'High'
+        self.rawdata['StepTouchesLost'] = lost | lost.shift(1, fill_value=False)
         ## X-only travel, kept alongside Dist_mm so windowed sums of the two use
         ## the same step-attribution rule (see pytrackinganalysis.windowing).
         self.rawdata['XDist_mm'] = deltax.abs()
@@ -312,8 +318,11 @@ class Tracker:
             ## quality-filtered total alongside it rather than silently changing
             ## the headline number, so a user can see the size of the correction
             ## on their own data. A step is discarded if either endpoint was lost.
-            lost = data_subset['DataQuality'] != 'High'
-            contaminated = lost | lost.shift(1, fill_value=False)
+            if 'StepTouchesLost' in data_subset.columns:
+                contaminated = data_subset['StepTouchesLost'].astype(bool)
+            else:
+                lost = data_subset['DataQuality'] != 'High'
+                contaminated = lost | lost.shift(1, fill_value=False)
             total_distance_hq = data_subset.loc[~contaminated, 'Dist_mm'].sum()
         else:
             perc_sleeping = pd.NA

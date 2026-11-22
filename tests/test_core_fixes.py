@@ -431,6 +431,27 @@ def test_lost_tracking_frames_are_excluded_from_the_quality_filtered_distance(pa
     assert result["TotalDistanceHighQualityOnly"] < result["TotalDistance"]
 
 
+def test_a_step_out_of_a_lost_frame_before_a_cutoff_stays_discarded(parameters):
+    """The first row of a phase carries the step from the row before the
+    phase. When that row was lost the step is a coordinate jump, but the
+    window's own shift saw no lost row before it and kept the jump: 0 mm
+    over the whole recording, 50 mm over the phases."""
+    raw = make_raw(
+        minutes=(0.0, 1.0, 2.0, 3.0, 4.0, 5.0),
+        xs=(0.0, 0.0, 50.0, 0.0, 0.0, 0.0),        # row 2 lost, with a jump
+        quality=("High", "High", "NotFound", "High", "High", "High"),
+    )
+    tracker = TrackerMod.Tracker(
+        "T_1", 0, make_regions("T_1"), pd.DataFrame(),
+        parameters, FakeDesign(), raw,
+    )
+    whole = tracker.summarize()["TotalDistanceHighQualityOnly"]
+    phases = (tracker.summarize((0, 3))["TotalDistanceHighQualityOnly"]
+              + tracker.summarize((3, float("inf")))["TotalDistanceHighQualityOnly"])
+    assert whole == pytest.approx(0.0)
+    assert phases == pytest.approx(whole)
+
+
 def test_a_clean_recording_reports_the_same_distance_both_ways(parameters):
     """Guard-rail: with no lost frames the correction must be exactly zero."""
     raw = make_raw(minutes=(0.0, 1.0, 2.0), xs=(0.0, 10.0, 20.0))
