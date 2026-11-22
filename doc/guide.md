@@ -2214,6 +2214,7 @@ uv run pytrack-hub /absolute/path/to/project
 # Standalone Config Editor (with visual Script Editor):
 pytrack-config
 pytrack-config /path/to/ExperimentDirectory
+pytrack-config /path/to/MyRecording        # no config yet: describe it (About), then save
 
 # Standalone QC Viewer:
 pytrack-qc /path/to/ExperimentDirectory

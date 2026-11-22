@@ -4534,7 +4534,8 @@ class ExperimentConfigsDialog(QDialog):
         self._btn_edit = ActionButton("Edit config…", Category.TOOLS,
                                       icon_name="config")
         self._btn_edit.setToolTip(
-            "Open this experiment's config in the Config Editor.")
+            "Open this experiment's config in the Config Editor: its rig and "
+            "regions, and on the About tab what the recording is.")
         self._btn_edit.clicked.connect(self._edit_selected)
         row.addWidget(self._btn_create)
         row.addWidget(self._btn_create_all)

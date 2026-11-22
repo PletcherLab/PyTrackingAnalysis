@@ -1726,6 +1726,27 @@ def test_a_folder_with_a_recording_and_no_config_can_be_described(
     assert disk_change.asked == []
 
 
+def test_the_hub_points_a_replicate_at_the_about_tab(qapp, tmp_path):
+    """For a replicate the way in is the Hub's Experiment configs… dialog,
+    whose Edit config… opens the same editor."""
+    from pytrackinganalysis.apps import hub as hub_mod
+
+    tracker_study(tmp_path / "Study", {"Rep1": None})
+    win = hub_mod.HubWindow(initial_project=str(tmp_path / "Study"))
+    qapp.processEvents()
+    try:
+        dialog = hub_mod.ExperimentConfigsDialog(win, win._current_project())
+        launched = []
+        win._launch_subapp = lambda which, directory=None: launched.append(
+            (which, str(directory)))
+        assert "About" in dialog._btn_edit.toolTip()
+        dialog._edit_selected()
+        assert launched == [("config", str(tmp_path / "Study" / "Rep1"))]
+        dialog.close()
+    finally:
+        win.close()
+
+
 def test_the_help_says_where_to_start_and_what_the_section_holds():
     from pytrackinganalysis.help.render import load_topic_markdown
 
