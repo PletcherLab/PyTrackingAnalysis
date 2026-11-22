@@ -1,5 +1,5 @@
-# Mirrored from pyflic: pyflic/base/about.py at commit f6fb479
-# ("about: keep a catalogue's keys, and start from an earlier recording").
+# Mirrored from pyflic: pyflic/base/about.py at commit 30211ab
+# ("about: a design factor whose levels are not a list never raises").
 #
 # pyflic is the origin of this module, and this file is the verbatim copy its
 # docstring mentions — so "here" in "change it here first" means pyflic.
@@ -62,7 +62,7 @@ PyTrackingAnalysis keeps a verbatim copy of this module: change it here first.
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 ABOUT_KEY = "about"
@@ -128,6 +128,22 @@ def sex_values(value: Any) -> list[str]:
         return []
     items = value if isinstance(value, (list, tuple)) else [value]
     return [text for text in (_text(item) for item in items) if text]
+
+
+def declared_levels(value: Any) -> list[str]:
+    """The levels a design factor declares, as text.
+
+    A factor's levels are a list.  A config whose factor gives one value
+    instead (``Dose: 2``) still loads, since the loader reads only the factor
+    names, so a section that describes the recording must not be what stops
+    it: such a value is read as the one level it names, and nothing or a
+    blank as none.  A mapping declares its keys.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return []
+    if isinstance(value, (str, bytes)) or not isinstance(value, Iterable):
+        value = [value]
+    return [str(level).strip() for level in value]
 
 
 def level_meaning(entry: Any) -> str:
@@ -288,8 +304,8 @@ def about_problems(about: Any, factors: Mapping[str, Any] | None = None
         problems.append((f"{ABOUT_KEY}.{FACTORS_KEY}",
                          "about.factors should map each factor to its kind and levels"))
         return problems
-    declared = {str(k).strip(): [str(v).strip() for v in (vals or [])]
-                for k, vals in (factors or {}).items()} if isinstance(factors, Mapping) else {}
+    declared = {str(k).strip(): declared_levels(vals)
+                for k, vals in factors.items()} if isinstance(factors, Mapping) else {}
     for name, body in raw.items():
         where = f"{ABOUT_KEY}.{FACTORS_KEY}.{name}"
         if not isinstance(body, Mapping):
@@ -337,7 +353,7 @@ def shared_about(about: Any, factors: Mapping[str, Any] | None = None) -> dict:
                           if key in about})
     if factors is None or FACTORS_KEY not in shared:
         return shared
-    declared = {str(name).strip(): {str(level).strip() for level in (levels or [])}
+    declared = {str(name).strip(): set(declared_levels(levels))
                 for name, levels in factors.items()} if isinstance(factors, Mapping) else {}
     kept: dict[str, Any] = {}
     for name, body in shared[FACTORS_KEY].items():

@@ -22,11 +22,11 @@ from pytrackinganalysis import about
 
 #: The pyflic commit ``pyflic/base/about.py`` was copied at, and the SHA-256
 #: of that file there.
-ORIGIN_COMMIT = "f6fb479"
-ORIGIN_SHA256 = "a7a5484e1b5f0ff1b48b1e9e4a6c61af7c399c3e600c905af0b330f9f300ba5c"
+ORIGIN_COMMIT = "30211ab"
+ORIGIN_SHA256 = "8f1e06e0e23c2afa5b8321e9dafa191539a2ac403a0621c203cc346bef277f14"
 
 ORIGIN_FUNCTIONS = [
-    "read_about", "_text", "sex_values", "level_meaning", "level_term",
+    "read_about", "_text", "sex_values", "declared_levels", "level_meaning", "level_term",
     "with_meaning", "factor_notes", "clean_about", "_clean_factors",
     "about_problems", "shared_about", "start_from", "meaning_spread",
 ]

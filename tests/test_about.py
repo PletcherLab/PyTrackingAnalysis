@@ -1,4 +1,4 @@
-# Mirrored from pyflic: tests/test_about.py at commit f6fb479, copied with the
+# Mirrored from pyflic: tests/test_about.py at commit 30211ab, copied with the
 # module it tests (pytrackinganalysis/about.py).  Only this note, the import
 # and the word "pyflic" before the numbers of pyflic's ADRs differ.  Change
 # the origin first, then copy it here whole (see tests/test_about_mirror.py).
@@ -160,3 +160,57 @@ def test_a_member_with_a_term_and_one_without_are_compared_by_their_words():
 def test_a_member_that_says_nothing_about_a_level_is_not_a_difference():
     abouts = {"rep1": _about("w1118 > UAS-GtACR1"), "rep2": {}, "rep3": _about({"term": "GEN-0012"})}
     assert about_mod.meaning_spread(abouts) == []
+
+
+# ---------------------------------------------------------------------------
+# A design factor whose levels are not a list
+# ---------------------------------------------------------------------------
+#
+# ``experimental_design_factors: {Dose: 2}`` is not the list the linter asks
+# for, but the loader reads only the factor names, so such a config loads.
+# Describing the recording must never be what stops it: a value that is not a
+# list is read as the one level it names, and nothing as none.
+
+DOSED = {"series": "dose-2026",
+         "factors": {"Dose": {"kind": "treatment",
+                              "levels": {"2": "2% sucrose", "4": "4% sucrose"}}}}
+
+
+def _described(levels):
+    """What survives of DOSED's two levels when Dose's levels are *levels*."""
+    factors = {"Dose": levels}
+    problems = about_mod.about_problems(DOSED, factors)
+    undeclared = sorted(where.rsplit(".", 1)[1] for where, _message in problems)
+    shared = about_mod.shared_about(DOSED, factors)
+    started = about_mod.start_from({"title": "mine"}, DOSED, factors)
+    assert shared["series"] == "dose-2026" and shared["factors"]["Dose"]["kind"] == "treatment"
+    assert started == {"title": "mine", **shared}
+    kept = sorted(shared["factors"]["Dose"].get("levels", {}))
+    assert sorted(kept + undeclared) == ["2", "4"]           # each level: kept, or warned of
+    return kept
+
+
+def test_levels_that_are_one_value_declare_that_one_level():
+    assert _described(2) == ["2"]
+    assert _described("2") == ["2"]
+    assert _described(" 4 ") == ["4"]
+    assert _described(2.5) == []                             # the level 2.5, not 2 or 4
+    assert _described(True) == []
+
+
+def test_levels_that_are_missing_or_blank_declare_none():
+    assert _described(None) == []
+    assert _described("") == []
+    assert _described([]) == []
+
+
+def test_levels_in_a_list_a_tuple_or_a_mapping_are_read_as_before():
+    assert _described(["2", 4]) == ["2", "4"]
+    assert _described((2,)) == ["2"]
+    assert _described({"4": "anything"}) == ["4"]            # a mapping's keys
+
+
+def test_a_text_levels_value_is_one_level_not_its_letters():
+    about = {"factors": {"Genotype": {"levels": {"C": "one letter", "Ctrl": "the word"}}}}
+    shared = about_mod.shared_about(about, {"Genotype": "Ctrl"})
+    assert shared["factors"]["Genotype"]["levels"] == {"Ctrl": "the word"}
