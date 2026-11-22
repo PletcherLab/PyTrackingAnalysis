@@ -4142,6 +4142,9 @@ class ProjectInfoDialog(QDialog):
         """When the directory already is a Project, edit it: prefill name and
         notes from its project.yaml and say so in the title."""
         directory = self.dir_edit.text().strip()
+        ## The keys the widgets do not show belong to the design loaded for
+        ## THIS directory; another directory's must not ride along.
+        self._loaded_design = {}
         if self._initialize:
             ## Name follows the directory, always. The design is still worth
             ## inferring: an initialized directory usually already holds the
@@ -4221,6 +4224,12 @@ class ProjectInfoDialog(QDialog):
                 g = cfg.get("global") or {}
                 t = _et.get_experiment_type(g.get("experiment_type"))
                 design_global = {"experiment_type": t.name}
+                if t.tracking_type is None:
+                    ## Custom: the type fixes no tracker, so the design says
+                    ## which — without it the Project resolved TRACKER and
+                    ## tested a two-choice design on distance alone.
+                    design_global["tracking_type"] = \
+                        t.resolve_tracking_type(g).name
                 cutoffs = t.resolve_facet_cutoffs(g)
                 if cutoffs:
                     design_global["facet_cutoffs"] = list(cutoffs)
@@ -4248,7 +4257,17 @@ class ProjectInfoDialog(QDialog):
             pass
         return {}
 
+    #: What the dialog's widgets show: rebuilt from them on save. Every other
+    #: key of ``design:`` and ``design.global`` is kept as it was loaded, as
+    #: every other writer of project.yaml keeps the keys it does not own.
+    _DESIGN_KEYS = ("global", "counting_regions")
+    _GLOBAL_KEYS = ("experiment_type", "experimental_design_factors",
+                    "facet_cutoffs", "facet_labels", "min_transitions",
+                    "min_movement", "hypotheses")
+
     def _load_design(self, design: dict) -> None:
+        import copy
+        self._loaded_design = copy.deepcopy(dict(design or {}))
         g = dict((design or {}).get("global") or {})
         idx = self.type_combo.findData(
             __import__("pytrackinganalysis.experiment_types",
@@ -4277,7 +4296,15 @@ class ProjectInfoDialog(QDialog):
         self._loaded_hypotheses = g.get("hypotheses")
 
     def _build_design(self) -> dict | None:
-        """The design dict from the widgets, or None after showing an error."""
+        """The design dict from the widgets, or None after showing an error.
+
+        Keys the widgets do not show are kept from the loaded design — except
+        a ``tracking_type`` the chosen Experiment Type fixes itself, which a
+        typed design omits (ADR-0001) and would otherwise contradict."""
+        import copy
+        loaded = copy.deepcopy(self._loaded_design)
+        kept_global = {k: v for k, v in dict(loaded.get("global") or {}).items()
+                       if k not in self._GLOBAL_KEYS}
         g: dict = {"experiment_type": self.type_combo.currentData()}
         factors: dict = {}
         for r in range(self.factors_table.rowCount()):
@@ -4342,11 +4369,16 @@ class ProjectInfoDialog(QDialog):
                                     + "\n".join(problems))
                 return None
             g["hypotheses"] = hypotheses
+        if t.tracking_type is not None:
+            kept_global.pop("tracking_type", None)
+        g.update({k: v for k, v in kept_global.items() if k not in g})
         design: dict = {"global": g}
         counting = [n.strip() for n in self.counting_edit.text().split(",")
                     if n.strip()]
         if counting:
             design["counting_regions"] = counting
+        design.update({k: v for k, v in loaded.items()
+                       if k not in self._DESIGN_KEYS})
         return design
 
     def _carry_hypotheses(self, directory: str, design: dict) -> None:

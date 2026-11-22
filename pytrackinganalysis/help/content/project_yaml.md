@@ -31,9 +31,10 @@ experiment_scripts: []
 - **`notes`** are optional and appear near the top of the Project report.
 - **`design.global`** is the shared global design: experiment type, design factors and levels, facets, phase names, type-specific quality criteria, and any Directional Hypotheses (Valence; see **Valence statistics**).
 - **`design.counting_regions`** fixes the treatment-region names and their order. Aliases stay per replicate.
+- A **Custom** design (no Experiment Type) also names its **`tracking_type`**, because no type fixes one; **Create project** infers it from the first replicate. A Custom design without one takes the replicates' tracking type, and they must all agree on it.
 - **`scripts`** and **`experiment_scripts`** hold the two script levels - see **Scripts sections** below.
 
-Advanced hand-edited keys placed under `design.global` are enforced too. Use that deliberately: if you put a key there, every replicate must resolve to the same value.
+Advanced hand-edited keys placed under `design.global` are enforced too. Use that deliberately: if you put a key there, every replicate must resolve to the same value. **Edit config...** keeps every key it does not show, in `design:` and in `design.global`.
 
 ## Scripts sections
 

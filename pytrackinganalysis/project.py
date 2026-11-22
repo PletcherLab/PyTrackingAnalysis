@@ -435,10 +435,22 @@ class Project:
                 "experimental_design_factors") or {})
         self.design_factors = {str(k): [str(l) for l in (v or [])]
                                for k, v in ref_factors.items()}
+        ## A design that names no tracking_type for a type that does not fix
+        ## one (Custom) leaves the replicates to say it, as a legacy Project
+        ## does — they must then agree with the first. Resolving the design
+        ## alone defaulted to TRACKER, so a two-choice Project made in the
+        ## Create Project dialog was tested on TotalDistancePerMin only.
+        self._tracking_type_from_replicates = bool(
+            self.design and self.experiment_type.tracking_type is None
+            and "tracking_type" not in design_global
+            and self.experiment_names)
+        if self.design and not self._tracking_type_from_replicates:
+            reference = design_global
+        else:
+            reference = (self._global(self.experiment_names[0])
+                         if self.experiment_names else {})
         self.tracking_type_name = self.experiment_type.resolve_tracking_type(
-            design_global if self.design
-            else (self._global(self.experiment_names[0])
-                  if self.experiment_names else {})).name
+            reference).name
 
         problems: list[str] = []
         if self.design:
@@ -547,6 +559,12 @@ class Project:
                 problems.append(
                     f"{label}: {key} is {actual!r} but the project design "
                     f"requires {expected_cmp!r}")
+        if self._tracking_type_from_replicates:
+            tt = t.resolve_tracking_type(g).name
+            if tt != self.tracking_type_name:
+                problems.append(
+                    f"{label}: tracking_type is '{tt}' but the project uses "
+                    f"'{self.tracking_type_name}'")
         if "hypotheses" not in design_global \
                 and canonical_hypotheses(g.get("hypotheses")):
             ## A prediction the design does not make is still a design

@@ -307,7 +307,9 @@ carries the old name into the new Project's output filenames.
 replicates share: the experiment type, design factors *and levels*, facet
 cutoffs and phase names, quality criteria (`min_transitions`,
 `min_movement`), and the counting-region **names** (aliases stay
-per-experiment). Opening the Project **hard-validates** every replicate's
+per-experiment). A Custom design (no experiment type) also names its
+`tracking_type`; one that does not takes the replicates' tracking type, and
+they must all agree on it. Opening the Project **hard-validates** every replicate's
 resolved config against it (a config omitting a key the type defaults still
 matches a design stating that default); region→treatment assignments, fly
 counts, and rigs may differ. The Create/Edit Project dialog edits the design

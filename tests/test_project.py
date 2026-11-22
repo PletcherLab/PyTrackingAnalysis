@@ -1158,3 +1158,120 @@ def test_hub_create_experiment_defers_to_initialize_for_existing_dirs(
     assert not (tmp_path / "Loose" / "tracking_config.yaml").exists()
     assert "Initialize existing directory" in warned[-1]
     win.close()
+
+
+# ---- a Custom design that names no tracking_type ---------------------------
+
+def _custom_config(tracking_type="TWOCHOICETRACKER"):
+    return {
+        "global": {
+            "tracking_type": tracking_type,
+            "tracking_rig": "arena_max",
+            "facet_cutoffs": [10, 70],
+            "experimental_design_factors": {"genotype": ["chr", "control"]},
+        },
+        "counting_regions": {"Light": {"alias": "L"},
+                             "NoLight": {"alias": "N"}},
+        "tracking_regions": {"T_0": {"experimental_factors": "chr"}},
+    }
+
+
+_CUSTOM_DESIGN = {
+    "global": {
+        "experiment_type": "Custom",
+        "facet_cutoffs": [10, 70],
+        "experimental_design_factors": {"genotype": ["chr", "control"]},
+    },
+    "counting_regions": ["Light", "NoLight"],
+}
+
+
+def _custom_design_project(tmp_path, config_for):
+    import copy
+    prj.create_project_file(str(tmp_path), "CProj",
+                            design=copy.deepcopy(_CUSTOM_DESIGN))
+    for name in ("Rep1", "Rep2"):
+        d = tmp_path / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "tracking_config.yaml").write_text(
+            yaml.safe_dump(config_for(name)), encoding="utf-8")
+    return prj.Project(str(tmp_path))
+
+
+def test_a_custom_design_without_a_tracking_type_takes_the_replicates(tmp_path):
+    """A Custom design written before the dialog recorded tracking_type must
+    not make a two-choice Project a TRACKER one: that tested only
+    TotalDistancePerMin and dropped FinalPI and FinalPercentage."""
+    p = _custom_design_project(tmp_path, lambda _n: _custom_config())
+    assert p.tracking_type_name == "TWOCHOICETRACKER"
+    summary = _summary_frame()
+    summary.insert(0, "Experiment", "Rep1")
+    metrics = {r["metric"] for r in p.comparison_rows(summary, None)}
+    assert {"FinalPI", "FinalPercentage", "TotalDistancePerMin"} <= metrics
+
+
+def test_a_custom_design_without_a_tracking_type_still_needs_agreement(tmp_path):
+    def config_for(name):
+        return _custom_config("TRACKER" if name == "Rep2"
+                              else "TWOCHOICETRACKER")
+
+    with pytest.raises(ValueError, match="Rep2.*tracking_type"):
+        _custom_design_project(tmp_path, config_for)
+
+
+def test_dialog_keeps_design_keys_it_does_not_show(qapp, tmp_path):
+    """Every other writer of project.yaml keeps keys it does not own; the
+    Create/Edit Project dialog used to rebuild design: from its widgets
+    alone, dropping a Custom design's tracking_type among others."""
+    import copy
+
+    from pytrackinganalysis.apps.hub import ProjectInfoDialog
+
+    design = copy.deepcopy(_CUSTOM_DESIGN)
+    design["global"]["tracking_type"] = "TWOCHOICETRACKER"
+    design["global"]["lab_note_key"] = 3
+    design["extra_section"] = {"kept": True}
+    prj.create_project_file(str(tmp_path), "CProj", design=design)
+
+    dlg = ProjectInfoDialog(None, start_dir=str(tmp_path))
+    assert dlg.windowTitle() == "Edit project"
+    dlg._save()
+    saved = yaml.safe_load((tmp_path / "project.yaml").read_text())["design"]
+    assert saved["global"]["tracking_type"] == "TWOCHOICETRACKER"
+    assert saved["global"]["lab_note_key"] == 3
+    assert saved["extra_section"] == {"kept": True}
+    dlg.close()
+
+
+def test_dialog_drops_a_tracking_type_the_chosen_type_fixes(qapp, tmp_path):
+    import copy
+
+    from pytrackinganalysis.apps.hub import ProjectInfoDialog
+
+    design = copy.deepcopy(_CUSTOM_DESIGN)
+    design["global"]["tracking_type"] = "TRACKER"
+    prj.create_project_file(str(tmp_path), "CProj", design=design)
+
+    dlg = ProjectInfoDialog(None, start_dir=str(tmp_path))
+    dlg.type_combo.setCurrentIndex(dlg.type_combo.findData("Valence"))
+    dlg._save()
+    saved = yaml.safe_load((tmp_path / "project.yaml").read_text())["design"]
+    assert saved["global"]["experiment_type"] == "Valence"
+    assert "tracking_type" not in saved["global"]
+    dlg.close()
+
+
+def test_dialog_infers_a_custom_designs_tracking_type(qapp, tmp_path):
+    from pytrackinganalysis.apps.hub import ProjectInfoDialog
+
+    wrap = tmp_path / "wrap"
+    (wrap / "Old1").mkdir(parents=True)
+    (wrap / "Old1" / "tracking_config.yaml").write_text(
+        yaml.safe_dump(_custom_config()), encoding="utf-8")
+    dlg = ProjectInfoDialog(None, start_dir=str(wrap))
+    dlg._save()
+    saved = yaml.safe_load((wrap / "project.yaml").read_text())["design"]
+    assert saved["global"]["experiment_type"] == "Custom"
+    assert saved["global"]["tracking_type"] == "TWOCHOICETRACKER"
+    assert prj.Project(str(wrap)).tracking_type_name == "TWOCHOICETRACKER"
+    dlg.close()
