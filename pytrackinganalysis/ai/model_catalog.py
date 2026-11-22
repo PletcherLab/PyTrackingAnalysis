@@ -22,15 +22,16 @@ from .base import AISummarizer
 #: A cache older than this is refreshed when the AI Summary dialog opens.
 TTL_DAYS = 30.0
 
-_CACHE_FILE = (
-    Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
-    / "pytrackinganalysis" / "ai_models.json"
-)
+def cache_file() -> Path:
+    """Beside ``ui.json``, worked out on every call for the same reason
+    (:func:`~pytrackinganalysis.ui.settings.config_dir`)."""
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "pytrackinganalysis" / "ai_models.json"
 
 
 def _load() -> dict:
     try:
-        data = json.loads(_CACHE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(cache_file().read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -84,9 +85,10 @@ def refresh(provider: type[AISummarizer]) -> list[str]:
         "fetched": datetime.now().isoformat(timespec="seconds"),
     }
     try:
-        _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        path = cache_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(
-            _CACHE_FILE,
+            path,
             lambda handle: handle.write(json.dumps(data, indent=2,
                                                    sort_keys=True)),
         )

@@ -318,8 +318,8 @@ def test_anthropic_model_filter_keeps_claude_ids():
 def test_model_catalog_cache_roundtrip_and_fallback(tmp_path, monkeypatch):
     from pytrackinganalysis.ai import AnthropicSummarizer, model_catalog
 
-    monkeypatch.setattr(model_catalog, "_CACHE_FILE",
-                        tmp_path / "ai_models.json")
+    monkeypatch.setattr(model_catalog, "cache_file",
+                        lambda: tmp_path / "ai_models.json")
     # No cache yet: curated fallback, and a refresh is wanted.
     assert model_catalog.cached_models(AnthropicSummarizer) == \
         list(AnthropicSummarizer.models)
@@ -340,8 +340,8 @@ def test_model_catalog_cache_roundtrip_and_fallback(tmp_path, monkeypatch):
 def test_model_catalog_failed_refresh_keeps_old_cache(tmp_path, monkeypatch):
     from pytrackinganalysis.ai import AISummaryError, OpenAISummarizer, model_catalog
 
-    monkeypatch.setattr(model_catalog, "_CACHE_FILE",
-                        tmp_path / "ai_models.json")
+    monkeypatch.setattr(model_catalog, "cache_file",
+                        lambda: tmp_path / "ai_models.json")
     monkeypatch.setattr(OpenAISummarizer, "fetch_models",
                         classmethod(lambda cls: ["gpt-5.2", "gpt-6"]))
     model_catalog.refresh(OpenAISummarizer)

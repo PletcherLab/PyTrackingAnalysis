@@ -79,10 +79,7 @@ def hub(qapp, no_dialogs, tmp_path, monkeypatch):
     from pytrackinganalysis.apps.hub import HubWindow
 
     # Keep the real ui.json out of the way: HubWindow touches recent projects.
-    monkeypatch.setattr(
-        "pytrackinganalysis.ui.settings._CONFIG_FILE", tmp_path / "ui.json"
-    )
-    monkeypatch.setattr("pytrackinganalysis.ui.settings._CONFIG_DIR", tmp_path)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     window = HubWindow()
     ## These tests exercise the artifact/plot tab machinery itself, and the
     ## Batch card's "Suppress new plot / output tabs" switch — on by default —
@@ -263,10 +260,7 @@ def test_a_savefig_failure_still_closes_the_figure(dock):
 def qc_window(qapp, no_dialogs, tmp_path, monkeypatch):
     from pytrackinganalysis.apps.qc_viewer import QcViewerWindow
 
-    monkeypatch.setattr(
-        "pytrackinganalysis.ui.settings._CONFIG_FILE", tmp_path / "ui.json"
-    )
-    monkeypatch.setattr("pytrackinganalysis.ui.settings._CONFIG_DIR", tmp_path)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     window = QcViewerWindow()
     yield window
     window.close()
@@ -548,9 +542,43 @@ def test_recursive_filtering_reports_the_real_row_count(qapp):
 def settings(tmp_path, monkeypatch):
     from pytrackinganalysis.ui import settings as ui_settings
 
-    monkeypatch.setattr(ui_settings, "_CONFIG_DIR", tmp_path / "cfg")
-    monkeypatch.setattr(ui_settings, "_CONFIG_FILE", tmp_path / "cfg" / "ui.json")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     return ui_settings
+
+
+def test_settings_follow_the_config_home_whenever_it_is_set(tmp_path, monkeypatch):
+    """The location was fixed when the module was first imported, so a test
+    that pointed XDG_CONFIG_HOME elsewhere afterwards still wrote its
+    temporary folders into the user's real recent-project list."""
+    from pytrackinganalysis.ui import settings as ui_settings
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "late"))
+    ui_settings.add_recent_project(tmp_path / "proj")
+    written = tmp_path / "late" / "pytrackinganalysis" / "ui.json"
+    assert written.is_file()
+    assert json.loads(written.read_text())["recent_projects"] == [
+        str((tmp_path / "proj").resolve())]
+
+
+def test_an_empty_config_home_counts_as_unset(monkeypatch):
+    from pathlib import Path
+
+    from pytrackinganalysis.ui import settings as ui_settings
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", "")
+    monkeypatch.setenv("HOME", "/nonexistent-home")
+    assert ui_settings.config_file() == Path(
+        "/nonexistent-home/.config/pytrackinganalysis/ui.json")
+
+
+def test_the_suite_never_writes_the_real_settings():
+    """conftest points every test at a folder of its own."""
+    from pathlib import Path
+
+    from pytrackinganalysis.ui import settings as ui_settings
+
+    real = Path.home() / ".config" / "pytrackinganalysis"
+    assert real not in ui_settings.config_file().parents
 
 
 def test_settings_round_trip(settings):
@@ -576,7 +604,7 @@ def test_an_interrupted_save_leaves_the_previous_settings_intact(settings, monke
     settings.set_value("theme", "light")  # swallowed, as before
 
     assert settings.load() == good, "an interrupted write destroyed the settings"
-    assert json.loads(settings._CONFIG_FILE.read_text())["theme"] == "dark"
+    assert json.loads(settings.config_file().read_text())["theme"] == "dark"
 
 
 def test_a_failed_save_leaves_no_temp_files_behind(settings, monkeypatch):
@@ -588,7 +616,7 @@ def test_a_failed_save_leaves_no_temp_files_behind(settings, monkeypatch):
     )
     settings.set_value("theme", "light")
 
-    leftovers = [p.name for p in settings._CONFIG_DIR.iterdir() if p.name != "ui.json"]
+    leftovers = [p.name for p in settings.config_dir().iterdir() if p.name != "ui.json"]
     assert leftovers == []
 
 

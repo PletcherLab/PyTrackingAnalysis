@@ -24,6 +24,16 @@ matplotlib.use("Agg")
 from pytrackinganalysis import Parameters  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _isolated_ui_settings(tmp_path_factory, monkeypatch):
+    """Point the persisted UI preferences (``ui.json``, the AI model cache) at
+    a folder of the test's own. Opening a Project in the Hub or the Config
+    Editor adds it to the recent list, so without this the suite wrote its
+    temporary folders into the user's real
+    ``~/.config/pytrackinganalysis/ui.json``."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("xdg")))
+
+
 DEFAULT_MINUTES = (0.0, 1.0, 2.0)
 DEFAULT_XS = (0.0, 10.0, 20.0)
 
