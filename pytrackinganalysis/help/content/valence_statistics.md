@@ -49,13 +49,12 @@ Two-sided by default. If you predicted a direction **before the data existed**, 
 global:
   hypotheses:
   - expect: Mutant < WT          # mutants prefer Light less
-  - expect: Mutant < WT
-    phases: [Cooldown]           # optional; default = the Primary Phase
+    phases: [Experiment, Cooldown]   # optional; default = the Primary Phase
 ```
 
 - A prediction names levels of **one** factor and holds within every level of the others.
 - It covers `FinalPI` and `FinalPercentage` together, because higher means more time on Light for both. `TotalDistancePerMin` is always two-sided.
-- Pairs you do not predict stay two-sided. With three levels, write one entry per predicted pair.
+- State each pair once, listing every phase it covers in that entry's `phases`. Pairs you do not predict stay two-sided. With three levels, write one entry per predicted pair.
 - A single treatment is predicted against indifference: `WT > indifference`.
 - A phase that does not exist at the current cutoffs is a design error. Change `facet_cutoffs` and the default phase names go away, so update `phases`.
 - A result in the opposite direction keeps its large one-sided p. It is not re-run two-sided.

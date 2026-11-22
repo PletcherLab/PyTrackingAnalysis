@@ -43,8 +43,7 @@ All tests are two-sided unless you declare a **Directional Hypothesis**, a predi
 global:                      # design: → global: in project.yaml
   hypotheses:
   - expect: Mutant < WT      # mutants prefer Light less
-  - expect: Mutant < WT
-    phases: [Cooldown]       # optional; default = the Primary Phase
+    phases: [Experiment, Cooldown]   # optional; default = the Primary Phase
 ```
 
 **Where to enter it**
@@ -58,7 +57,7 @@ global:                      # design: → global: in project.yaml
 - Names that contain `>` themselves are fine. Put spaces around the comparison sign only: `Nanchung>Chrimson > WCS>Chrimson`.
 - It covers `FinalPI` and `FinalPercentage` only; higher means more time on Light for both. Movement is always two-sided.
 - Leaving out `phases` means the Primary Phase (Experiment, 10–70 min). If you change the facet cutoffs, the default phase names go away, so update `phases` too.
-- With three levels, write one entry per predicted pair. Pairs you don't predict stay two-sided.
+- State each pair once, listing every phase it covers in that entry's `phases`. With three levels, write one entry per predicted pair. Pairs you don't predict stay two-sided.
 - A single treatment is predicted against indifference: `WT > indifference`.
 - Saving is blocked if a prediction names an unknown level, levels of two factors, or a phase that doesn't exist.
 
