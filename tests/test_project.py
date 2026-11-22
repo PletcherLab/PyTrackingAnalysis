@@ -132,6 +132,29 @@ def test_combined_frames_and_build(tmp_path):
     assert "mixed" in text and "Welch" in text
 
 
+def test_a_replicate_without_phases_is_missing_not_silently_dropped(tmp_path):
+    """Every phase statistic is computed on the pooled facet frame. A
+    replicate with a flat summary but no _Summary_Facet.csv (the Hub's flat
+    Summarize, or no cutoffs) was left out of it without a word, while the
+    header still counted its flies and named it among the replicates."""
+    p = _make_project(tmp_path, names=("Rep1", "Rep2", "Rep3"))
+    (tmp_path / "Rep3" / "analysis" / "Rec_Summary_Facet.csv").unlink()
+    summary, facet, excluded, missing = p.combined_frames()
+    assert missing == ["Rep3"]
+    assert set(summary["Experiment"]) == set(facet["Experiment"]) \
+        == {"Rep1", "Rep2"}
+    assert set(excluded["Experiment"]) == {"Rep1", "Rep2"}
+
+
+def test_without_any_phases_the_flat_summaries_are_the_analysis(tmp_path):
+    p = _make_project(tmp_path)
+    for name in ("Rep1", "Rep2"):
+        (tmp_path / name / "analysis" / "Rec_Summary_Facet.csv").unlink()
+    summary, facet, _excluded, missing = p.combined_frames()
+    assert missing == [] and facet is None
+    assert set(summary["Experiment"]) == {"Rep1", "Rep2"}
+
+
 def test_missing_replicate_reported_not_analyzed(tmp_path):
     p = _make_project(tmp_path, names=("Rep1", "Rep2", "Rep3"),
                       with_analysis=False)

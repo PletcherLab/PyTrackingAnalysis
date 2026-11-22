@@ -845,22 +845,35 @@ class Project:
         Returns ``(summary, facet, excluded, missing)`` — each frame carries an
         ``Experiment`` first column; ``missing`` lists replicates without a
         saved summary (they are omitted, never silently analyzed).
+
+        When any replicate has a phase summary, one without is missing too:
+        every phase statistic is computed on the pooled phase frame, so it
+        would otherwise be left out of them without a word while still
+        counted among the pooled flies.
         """
-        summaries, facets, excludeds, missing = [], [], [], []
+        found: list[tuple[str, pd.DataFrame, pd.DataFrame | None, str | None]] = []
+        missing: list[str] = []
         for name in self.experiment_names:
             path = self._summary_csv(name)
             if path is None:
                 missing.append(name)
                 continue
-            df = pd.read_csv(path)
+            fpath = self._summary_csv(name, "_Summary_Facet.csv")
+            found.append((name, pd.read_csv(path),
+                          pd.read_csv(fpath) if fpath else None,
+                          self._summary_csv(name, "_Excluded.csv")))
+        if any(fdf is not None for _n, _df, fdf, _e in found):
+            missing += [name for name, _df, fdf, _e in found if fdf is None]
+            found = [entry for entry in found if entry[2] is not None]
+        missing = [name for name in self.experiment_names if name in missing]
+
+        summaries, facets, excludeds = [], [], []
+        for name, df, fdf, epath in found:
             df.insert(0, "Experiment", name)
             summaries.append(df)
-            fpath = self._summary_csv(name, "_Summary_Facet.csv")
-            if fpath:
-                fdf = pd.read_csv(fpath)
+            if fdf is not None:
                 fdf.insert(0, "Experiment", name)
                 facets.append(fdf)
-            epath = self._summary_csv(name, "_Excluded.csv")
             if epath:
                 try:
                     edf = pd.read_csv(epath)
