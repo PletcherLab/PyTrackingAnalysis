@@ -6,6 +6,9 @@ numbers a paper reports, so the assertions are about values, not smoke.
 
 from __future__ import annotations
 
+import os
+import stat
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -473,3 +476,31 @@ def test_distances_scale_with_mm_per_pixel():
         "T_1", 0, make_regions("T_1"), pd.DataFrame(), p, FakeDesign(), raw,
     )
     assert tracker.summarize()["TotalDistance"] == pytest.approx(1.0)
+
+
+# --------------------------------------------------------------------------
+# An atomic write keeps the file readable by the lab
+# --------------------------------------------------------------------------
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_an_atomic_write_keeps_the_files_permissions(tmp_path):
+    """mkstemp makes its file 0600 and os.replace keeps that mode, so every
+    rewritten removed_regions.yaml, tracking_config.yaml and repaired export
+    became unreadable to the other users of a shared folder — and a
+    removals file that cannot be read declares nothing."""
+    from pytrackinganalysis.io_utils import atomic_write_text
+
+    mask = os.umask(0o022)
+    try:
+        fresh = tmp_path / "fresh.yaml"
+        atomic_write_text(fresh, lambda h: h.write("a: 1\n"))
+        assert stat.S_IMODE(fresh.stat().st_mode) == 0o644
+
+        shared = tmp_path / "shared.yaml"
+        shared.write_text("a: 0\n")
+        shared.chmod(0o664)
+        atomic_write_text(shared, lambda h: h.write("a: 1\n"))
+        assert stat.S_IMODE(shared.stat().st_mode) == 0o664
+        assert shared.read_text() == "a: 1\n"
+    finally:
+        os.umask(mask)

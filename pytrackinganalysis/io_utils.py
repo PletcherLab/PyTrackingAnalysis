@@ -9,9 +9,25 @@ user with a half-serialised file and no copy of the original.
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from pathlib import Path
 from typing import Callable, TextIO, Union
+
+
+def _mode_for(path: Path) -> int:
+    """The permission bits the written file should end with: the existing
+    file's, else what a plain ``open(path, "w")`` would have given it.
+
+    ``mkstemp`` creates its file ``0600`` and ``os.replace`` keeps that, so
+    every rewrite used to leave a file the other users of a shared folder
+    could no longer read."""
+    try:
+        return stat.S_IMODE(os.stat(path).st_mode)
+    except OSError:
+        mask = os.umask(0)
+        os.umask(mask)
+        return 0o666 & ~mask
 
 
 def atomic_write_text(path: Union[str, Path], render: Callable[[TextIO], None],
@@ -39,6 +55,7 @@ def atomic_write_text(path: Union[str, Path], render: Callable[[TextIO], None],
             render(handle)
             handle.flush()
             os.fsync(handle.fileno())
+        os.chmod(tmp_name, _mode_for(path))
         os.replace(tmp_name, path)
     except BaseException:
         try:
