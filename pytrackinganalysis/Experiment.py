@@ -1769,17 +1769,6 @@ class Experiment:
         except OSError as err:
             logger.warning("Could not write the run manifest: %s", err)
 
-    def _run_started_at(self):
-        """Timestamp of the last :meth:`run_analysis`, or None if never recorded."""
-        import json
-
-        path = os.path.join(self.analysis_path, self._RUN_MANIFEST)
-        try:
-            with open(path, encoding="utf-8") as handle:
-                return float(json.load(handle)["started"])
-        except (OSError, ValueError, KeyError, TypeError):
-            return None
-
     def create_report(self, cutoffs=None, qc_cutoff: float = 0.9,
                       backend: str = "reportlab", notes: str | None = None) -> str:
         """Assemble a professional report for this experiment.
