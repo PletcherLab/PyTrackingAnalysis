@@ -3972,7 +3972,7 @@ def _run_pairwise_flat(exp) -> None:
     path = os.path.join(
         exp.analysis_path, f"{exp.arena.experiment_name}_Stats_flat.txt"
     )
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     print(f"Saved: {path}")
 

@@ -178,8 +178,11 @@ def create_project_file(project_dir, name: str | None = None,
         payload["design"] = design
     if "scripts" not in payload:
         payload["scripts"] = [default_project_script()]
-    with open(path, "w", encoding="utf-8") as handle:
-        yaml.safe_dump(payload, handle, sort_keys=False, allow_unicode=True)
+    ## Atomically, as every other writer of project.yaml: a plain open(path,
+    ## "w") truncates first, and a failure mid-write lost the design.
+    atomic_write_text(
+        path, lambda handle: yaml.safe_dump(payload, handle, sort_keys=False,
+                                            allow_unicode=True))
     return path
 
 

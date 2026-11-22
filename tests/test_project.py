@@ -377,6 +377,24 @@ def test_create_project_file_merges_and_preserves_unknown_keys(tmp_path):
     assert "notes" not in meta
 
 
+def test_an_interrupted_project_yaml_write_keeps_the_design(tmp_path, monkeypatch):
+    """project.yaml is the design authority, and create_project_file wrote it
+    with a plain open(path, "w"): a failure mid-write left it truncated, the
+    design gone, while every other writer of the file writes atomically."""
+    import copy
+    prj.create_project_file(str(tmp_path), "DProj", design=copy.deepcopy(_DESIGN))
+    before = (tmp_path / "project.yaml").read_text(encoding="utf-8")
+
+    def _half_written(data, stream=None, **kwargs):
+        stream.write("name: DPr")
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(prj.yaml, "safe_dump", _half_written)
+    with pytest.raises(OSError):
+        prj.create_project_file(str(tmp_path), notes="new notes")
+    assert (tmp_path / "project.yaml").read_text(encoding="utf-8") == before
+
+
 def test_a_default_name_is_not_stored_so_a_copied_project_yaml_follows_its_folder(
         tmp_path):
     """A stored default pinned the name: project.yaml copied into a sibling

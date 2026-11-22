@@ -315,7 +315,7 @@ def _run_flat_pairwise(ctx: RunContext) -> None:
     path = _os.path.join(
         exp.analysis_path, f"{exp.arena.experiment_name}_Stats_flat.txt"
     )
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     ctx.log(f"Saved: {path}")
 
