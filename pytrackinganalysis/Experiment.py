@@ -1743,7 +1743,8 @@ class Experiment:
     _RUN_MANIFEST = ".pytracking_run.json"
 
     def _write_run_manifest(self) -> None:
-        """Stamp the start of an analysis run so stale artifacts can be identified."""
+        """Stamp the start of an analysis run: when, with which cutoffs and
+        tracking type, and where the recording came from."""
         import json
         from datetime import datetime as _dt
 
@@ -2382,10 +2383,8 @@ class Experiment:
         name = self.arena.experiment_name
         print(f"=== Running analysis for: {name} ===\n")
 
-        ## Record when this run began so create_report can tell the artifacts it
-        ## produced from leftovers of an earlier configuration sitting in the
-        ## same directory. Without it a stale *_Summary_Facet.csv is embedded in
-        ## the PDF as a current result with no provenance marker at all.
+        ## Record when this run began, with which cutoffs and tracking type,
+        ## and where the recording was read from (ADR-0018).
         self._write_run_manifest()
 
         ## The AI Summary describes a single analysis run (ADR-0004). Unlike
