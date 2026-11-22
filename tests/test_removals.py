@@ -530,3 +530,15 @@ def test_a_sheet_row_names_a_project_by_its_path_under_the_batch(tmp_path):
 
     assert removals.apply_sheet(tmp_path)["counts"] == {"applied": 1}
     assert removals.read_removals(nested / "Rep1") == {"T_0": "dead"}
+
+
+def test_a_sheet_excel_saved_on_windows_is_read(tmp_path):
+    """Excel's "CSV (Comma delimited)" on Windows writes cp1252, not UTF-8.
+    One accented reason made the whole sheet fail to read, so none of its
+    removals reached the experiments."""
+    path = tmp_path / "removed_regions.csv"
+    path.write_bytes("experiment,region,reason\nRep1,T_1,mort\xe9 \x96 20 min\n"
+                     .encode("latin-1"))
+    [row] = removals.read_sheet(path)
+    assert (row.experiment, row.region) == ("Rep1", "T_1")
+    assert row.reason == "mort\xe9 – 20 min"

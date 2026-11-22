@@ -255,7 +255,12 @@ def read_sheet(path) -> list[SheetRow]:
     if str(path).lower().endswith((".xlsx", ".xls")):
         frame = pd.read_excel(path, dtype=str)
     else:
-        frame = pd.read_csv(path, dtype=str)
+        try:
+            frame = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            ## Excel's "CSV (Comma delimited)" on Windows writes cp1252: one
+            ## accented reason used to make the whole sheet unreadable.
+            frame = pd.read_csv(path, dtype=str, encoding="cp1252")
 
     def canon(header) -> str:
         return "".join(ch for ch in str(header).lower()
