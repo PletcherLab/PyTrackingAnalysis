@@ -277,12 +277,11 @@ class Experiment:
         ## experiment died with "Excel file format cannot be determined" — for
         ## the entirely ordinary reason that the user had the sheet open.
         ## Sorting also makes the choice deterministic when several are present.
-        xlsx_files = sorted(
-            ## glob.escape: a bracket anywhere in the path (a 'Trial [2]'
-            ## folder) makes the pattern a character class and matches nothing.
-            f for f in glob.glob(os.path.join(glob.escape(self.data_path), '*.xlsx'))
-            if not os.path.basename(f).startswith(('~$', '.'))
-        )
+        ## The workbooks layout.classify counts, by the same function: the
+        ## loader's own glob also took a removed_regions.xlsx Removal Sheet or
+        ## a directory named *.xlsx, and failed on a recording classified OK.
+        xlsx_files = [os.path.join(self.data_path, name)
+                      for name in layout.workbooks(self.data_path)]
         if not xlsx_files:
             raise FileNotFoundError(f"No .xlsx file found in {self.data_path}")
         if len(xlsx_files) > 1:

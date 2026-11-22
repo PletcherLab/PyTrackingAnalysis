@@ -232,3 +232,21 @@ def test_rig_calibration_is_shared_between_generic_and_pairwise_setters():
     pairwise = Parameters.Parameters()
     pairwise.set_pairwise_interaction_values_colloseum([8])
     assert generic.mm_per_pixel == pairwise.mm_per_pixel
+
+
+def test_the_loader_reads_the_workbook_the_classifier_reads(tmp_path):
+    """layout.classify left a Removal Sheet and a directory named *.xlsx out
+    of the recording's workbooks; the loader's own glob did not, so a
+    removed_regions.xlsx in data/ (sorting first) was loaded as the
+    recording and the experiment failed to load while classified OK."""
+    from pytrackinganalysis import layout
+
+    root = write_project(tmp_path / "proj")
+    pd.DataFrame({"project": [], "experiment": [], "region": [],
+                  "reason": []}).to_excel(
+        root / "data" / "removed_regions.xlsx", index=False)
+    (root / "data" / "Archive.xlsx").mkdir()
+    assert layout.workbooks(root / "data") == ["Synthetic.xlsx"]
+
+    exp = ExperimentMod.Experiment(str(root))
+    assert exp.arena.experiment_name == "Synthetic"
