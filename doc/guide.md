@@ -354,8 +354,8 @@ says what the recording is; no analysis reads it (§4.8).
 There are three equally valid ways to create one:
 
 1. **Config Editor** (recommended) — `pytrack-config` gives you structured
-   forms for every section, bulk region generation, and a live YAML preview,
-   so the file is valid by construction.
+   forms for every section and bulk region generation, so the file is valid
+   by construction.
 2. **Copy an existing config** — copy a working `tracking_config.yaml` into
    the new experiment directory and edit it.
    Inside a Project, **Experiment configs…** scaffolds a design-conformant
@@ -1249,8 +1249,7 @@ Structured editor for `tracking_config.yaml` with four tabs wrapped in a Card:
   of the factors and levels this config declares.  Your title, purpose and
   notes are left as they are, and nothing is saved until you save.
 
-A **YAML preview** Card below the tabs renders the live serialization for
-trust / debugging; an amber `●` dirty indicator surfaces unsaved edits.
+An amber `●` dirty indicator beside the file path surfaces unsaved edits.
 
 **If the file changed on disk.**  Another program can write a config while
 the editor has it open — the Hub writing new Directional Hypotheses into a

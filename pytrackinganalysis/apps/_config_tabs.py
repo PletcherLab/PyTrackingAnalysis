@@ -2,8 +2,8 @@
 
 Ported verbatim from ``config_ui.py`` so the visual layout matches the
 legacy editor.  The wrapping :class:`~pytrackinganalysis.apps.config_editor.ConfigEditorWindow`
-is responsible for the surrounding pyflic-style chrome (TopBar, Cards,
-YAML preview, Script Editor launcher).
+is responsible for the surrounding pyflic-style chrome (TopBar, Card,
+dirty indicator, Script Editor launcher).
 
 :class:`AboutTab` is the newcomer: the optional ``about:`` section, which
 describes the recording and is never read for an analysis (ADR-0019).

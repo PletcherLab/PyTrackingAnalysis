@@ -1,10 +1,10 @@
 """Config Editor — the standalone editor for ``tracking_config.yaml``.
 
 Wraps the form-based tab widgets (:mod:`._config_tabs`) in a pyflic-style
-chrome: :class:`TopBar` with Open/Save/Save-As and a theme toggle, a
-four-tab :class:`QTabWidget` hosted inside :class:`Card` panels, and a
-live YAML-preview Card at the bottom.  The Script Editor (Phase 4) opens
-from the File menu / toolbar as a non-modal child window.
+chrome: :class:`TopBar` with Open/Save/Save-As and a theme toggle, a path
+bar with an amber dirty indicator, and a four-tab :class:`QTabWidget` hosted
+inside a :class:`Card`.  The Script Editor (Phase 4) opens from the toolbar
+as a non-modal child window.
 
 The fourth tab, About, edits the optional ``about:`` section — what the
 recording is, which no analysis reads (ADR-0019).  It is also why
