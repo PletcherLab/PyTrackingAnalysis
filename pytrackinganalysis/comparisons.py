@@ -654,6 +654,12 @@ def mixed_p_value(data: pd.DataFrame, a: str, b: str, side: int = 0) -> float | 
     sub = data[data["Treatment"].isin([a, b])].copy()
     if sub["Experiment"].nunique() < 2:
         return None
+    if not (sub.groupby("Experiment")["Treatment"].nunique() == 2).any():
+        ## No replicate holds both: the treatment IS the replicate, so the
+        ## model cannot tell them apart. Its fit then has no valid standard
+        ## error, and the p it reported was a plate offset (ADR-0017: such a
+        ## pair is not estimable).
+        return None
     sub["is_b"] = (sub["Treatment"] == b).astype(float)
     return _mixed_fit("Value ~ is_b", sub, "is_b", side,
                       ("lbfgs", "bfgs", "powell"))

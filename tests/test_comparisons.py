@@ -504,3 +504,23 @@ def test_project_headline_is_shuffled_within_replicates(tmp_path):
     assert ("Experiment", "Male, WT", "Male, Mutant", row["p_perm"], True) \
         in df.attrs["headline"]
     assert "permutation p" in p.ai_prompt()
+
+
+def test_the_mixed_model_does_not_test_a_pair_no_replicate_holds_together():
+    """With every replicate holding only one of the two treatments the
+    treatment is the replicate: the fit has no valid standard error (a
+    Hessian that is not positive definite), yet its p was reported — here
+    about 1e-28 for a pure plate offset."""
+    rng = np.random.default_rng(1)
+    data = pd.DataFrame({
+        "Treatment": ["A"] * 10 + ["C"] * 10,
+        "Experiment": ["r1"] * 10 + ["r2"] * 10,
+        "Value": np.r_[rng.normal(0.0, 0.1, 10), rng.normal(1.1, 0.1, 10)],
+    })
+    assert C.mixed_p_value(data, "A", "C") is None
+
+    shared = pd.concat([data, pd.DataFrame({
+        "Treatment": ["A"] * 5 + ["C"] * 5, "Experiment": ["r3"] * 10,
+        "Value": np.r_[rng.normal(0.0, 0.1, 5), rng.normal(0.2, 0.1, 5)]})],
+        ignore_index=True)
+    assert C.mixed_p_value(shared, "A", "C") is not None
