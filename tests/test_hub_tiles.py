@@ -1507,7 +1507,7 @@ def test_initialize_experiment_files_scaffolds_and_opens_the_editor(
     # The recording was filed, the stray file parked, and the config written.
     assert (loose / "data" / "Rec.xlsx").is_file()
     assert (loose / "data" / "Rec_Data_1.csv").is_file()
-    assert (loose / "extra_files" / "notes.txt").is_file()
+    assert (loose / "data" / "extra_files" / "notes.txt").is_file()
     assert (loose / "tracking_config.yaml").is_file()
     assert not (loose / "Rec.xlsx").exists()
     # And the editor opened on it, which is the point of the button.

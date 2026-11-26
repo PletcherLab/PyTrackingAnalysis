@@ -102,8 +102,9 @@ _Avoid_: metadata, annotations (say description); run notes (those are
 An Experiment Directory whose DTrack export sits loose at its root instead of
 inside `data/`, where the loader looks. The data is intact — only its filing
 is wrong — so **filing** it (moving the `.xlsx`/`.csv` into `data/`, any other
-loose file into `extra_files/`, and never a `.yaml`, which at an experiment
+loose file into `data/extra_files/`, and never a `.yaml`, which at an experiment
 root is configuration or declaration) makes it loadable with nothing lost.
+Folders filed before 2026-11-26 have `extra_files/` at the root instead.
 _Avoid_: malformed, non-compliant, unconverted, needs conversion
 
 **Clock Rollback**:

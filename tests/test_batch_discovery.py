@@ -273,10 +273,25 @@ def test_filing_moves_the_recording_and_parks_the_rest(tmp_path):
     plan = layout.file_recording(experiment)
     assert not plan.refused
     assert sorted(os.listdir(experiment / "data")) == \
-        ["Trial7.xlsx", "Trial7_Data_1.csv"]
-    assert sorted(os.listdir(experiment / "extra_files")) == \
+        ["Trial7.xlsx", "Trial7_Data_1.csv", "extra_files"]
+    ## Inside data/, so the folder holding the recording holds all of it
+    ## (ADR-0011, amended 2026-11-26).
+    assert sorted(os.listdir(experiment / "data" / "extra_files")) == \
         ["notes.txt", "photo.jpg"]
+    assert not (experiment / "extra_files").exists()
+    assert plan.describe() == "2 file(s) → data/, 2 → data/extra_files/"
     assert layout.classify(experiment).status == layout.OK
+
+
+def test_files_parked_in_data_extra_files_never_change_what_loads(tmp_path):
+    ## A CSV-free folder inside data/ is invisible to the loader's test and to
+    ## the classifier: the recording is still the one workbook beside it.
+    experiment = unfiled(tmp_path / "Rep1")
+    (experiment / "Trial7_BG.jpg").write_bytes(b"x")
+    layout.file_recording(experiment)
+
+    assert layout.classify(experiment).status == layout.OK
+    assert layout.data_location(experiment).path == str(experiment / "data")
 
 
 def test_filing_never_moves_a_yaml_or_a_removal_sheet(tmp_path):

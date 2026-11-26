@@ -7,11 +7,14 @@ This module names those states and repairs the one that is repairable:
 
 * :func:`classify` — what a directory is, and why a run cannot use it.
 * :func:`plan_filing` / :func:`file_recording` — move an **Unfiled Recording**
-  into ``data/``, everything else loose into ``extra_files/``, and never a
+  into ``data/``, everything else loose into ``data/extra_files/``, and never a
   ``.yaml``: at an experiment root YAML is configuration or declaration, never
   data. ``tracking_config.yaml`` moved is an Experiment Directory un-made, and
   ``removed_regions.yaml`` moved silently returns removed flies to the
-  analysis (ADR-0010).
+  analysis (ADR-0010). The other loose files (a background image, light
+  programs, notes: none has a fixed name) go inside ``data/`` so that the
+  folder holding the recording holds all of it, as labdata files it (ADR-0011,
+  amended 2026-11-26); nothing reads a subfolder of ``data/``.
 
 "Loadable" is decided with the loader's own test — the same ``glob('*.xlsx')``
 and the same ``~$``/dot filter :class:`Experiment` uses — rather than a
@@ -45,7 +48,9 @@ import yaml
 
 from .project import CONFIG_FILENAME
 
-#: Where a recording belongs, and where everything else loose is parked.
+#: Where a recording belongs, and where everything else loose is parked:
+#: ``data/extra_files/``. Before 2026-11-26 filing parked it in ``extra_files/``
+#: at the experiment root; such folders are left as they are.
 DATA_DIRNAME = "data"
 EXTRA_DIRNAME = "extra_files"
 
@@ -706,7 +711,7 @@ class FilingPlan:
         parts = [f"{into_data} file(s) → {DATA_DIRNAME}/"]
         extra = len(self.moves) - into_data
         if extra:
-            parts.append(f"{extra} → {EXTRA_DIRNAME}/")
+            parts.append(f"{extra} → {DATA_DIRNAME}/{EXTRA_DIRNAME}/")
         if self.skipped:
             parts.append(f"{len(self.skipped)} skipped")
         return ", ".join(parts)
@@ -730,7 +735,7 @@ def plan_filing(directory) -> FilingPlan:
     """Plan the moves that would make *directory* loadable.
 
     ``.xlsx``/``.csv`` go to ``data/``; every other loose file goes to
-    ``extra_files/``; ``.yaml``/``.yml``, a Removal Sheet, hidden files, Excel
+    ``data/extra_files/``; ``.yaml``/``.yml``, a Removal Sheet, hidden files, Excel
     lock files, symlinks, and every subdirectory stay exactly where they are. A
     destination that already exists is never overwritten — it is skipped and
     reported.
@@ -753,7 +758,9 @@ def plan_filing(directory) -> FilingPlan:
         return plan
 
     data = data_dir(directory)
-    extra = os.path.join(directory, EXTRA_DIRNAME)
+    ## Inside data/, so the folder that holds the recording holds everything
+    ## filed with it (ADR-0011, amended): only data/'s own files are loaded.
+    extra = os.path.join(data, EXTRA_DIRNAME)
     problem = _target_problem(directory, data)
     if problem:
         plan.refused = problem
@@ -789,8 +796,8 @@ def plan_filing(directory) -> FilingPlan:
             continue
         recording = lower.endswith(RECORDING_SUFFIXES)
         if not recording:
-            ## Checked lazily: a stray file named extra_files/ must not refuse
-            ## a filing whose only job is moving the recording.
+            ## Checked lazily: a stray file named data/extra_files must not
+            ## refuse a filing whose only job is moving the recording.
             problem = _target_problem(directory, extra)
             if problem:
                 plan.skipped.append((name, problem))
@@ -798,8 +805,8 @@ def plan_filing(directory) -> FilingPlan:
         target = data if recording else extra
         destination = os.path.join(target, name)
         if os.path.exists(destination):
-            plan.skipped.append(
-                (name, f"{os.path.basename(target)}/{name} already exists"))
+            shown = os.path.relpath(destination, directory).replace(os.sep, "/")
+            plan.skipped.append((name, f"{shown} already exists"))
             continue
         plan.moves.append((source, destination))
 

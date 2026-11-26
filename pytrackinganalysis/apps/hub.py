@@ -784,7 +784,7 @@ class HubWindow(QMainWindow):
         init_exp_btn.setToolTip(
             "Adopt a directory that is already in the Project but has no "
             "tracking_config.yaml: any loose recording is filed into data/ "
-            "and every other loose file into extra_files/, the config is "
+            "and every other loose file into data/extra_files/, the config is "
             "scaffolded from the project design, and the Config Editor opens "
             "on it.")
         init_exp_btn.clicked.connect(self._project_initialize_experiment)

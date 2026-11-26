@@ -218,3 +218,27 @@ Refuted by execution and deliberately left alone: `run_batch`'s key matching
 (it normalizes both sides), the heading refresh, the re-armed sheet switch,
 the `extra_files/` lazy check, and the symlinked-workbook refusal — each was
 reported against an older snapshot of a file this work had already changed.
+
+## Amendment (2026-11-26): the parked files go in `data/extra_files/`
+
+Filing now parks every loose file that is not the recording in
+`data/extra_files/`, not `extra_files/` at the experiment root. The allowlist
+is unchanged: `.xlsx` and `.csv` into `data/`, YAML and a Removal Sheet stay
+at the root, and nothing is overwritten.
+
+- **Why.** labdata files an experiment's `data/` as the recording, and a run
+  folder there is itself an Experiment Directory. With `extra_files/` at the
+  root, a DTrack export's background image and light programs were filed
+  without the recording they belong to. They cannot be told apart by name
+  (both are optional, and the person names them), so they move with
+  everything else loose. labdata keeps them in the run's `data/extra_files/`
+  too, so the two layouts are one (labdata decision BX).
+- **Nothing reads them.** The loader and the classifier look only at the
+  files directly in `data/` (`glob('*.xlsx')`, `_Data_*.csv`,
+  `_recording_files`), and nothing filing parks is a `.xlsx` or `.csv`, so
+  the folder can never make the recording ambiguous. Clock repair copies
+  the whole of `data/`, `data/extra_files/` with it, and rewrites only the
+  export.
+- **Older folders stay as they are.** One filed before this keeps its
+  `extra_files/` at the root; nothing moves it. labdata files that one into
+  the run's `data/extra_files/` as well.

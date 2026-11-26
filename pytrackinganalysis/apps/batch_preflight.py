@@ -123,7 +123,7 @@ class BatchPreflightDialog(QDialog):
         self._btn_fix.setIcon(icon("batch", category=Category.TOOLS))
         self._btn_fix.setToolTip(
             "Move the selected experiment's recording into data/ (and any "
-            "other loose file into extra_files/). Never overwrites.")
+            "other loose file into data/extra_files/). Never overwrites.")
         self._btn_fix.clicked.connect(self._fix_selected)
         self._btn_fix.setEnabled(False)
         actions.addWidget(self._btn_fix)
@@ -404,7 +404,7 @@ class BatchPreflightDialog(QDialog):
             self, "File every unfiled recording",
             f"Move the recording into data/ in {len(targets)} experiment "
             "director(ies) of the checked projects?\n\nEvery other loose "
-            "file goes to extra_files/. YAML files and a removal sheet stay "
+            "file goes to data/extra_files/. YAML files and a removal sheet stay "
             "where they are, and nothing is overwritten.")
         if confirm != QMessageBox.StandardButton.Yes:
             return
