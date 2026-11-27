@@ -441,7 +441,8 @@ Rules for a typed experiment:
 - **Removed regions** (any experiment type, Valence or Custom): tracking
   regions *you* declare out of the analysis — a fly that died partway through,
   escaped, or a well that was empty. Nothing in the data reveals these, so you
-  enter them by hand: in the Hub (**Project → Removed regions…**), by editing
+  enter them by hand: in the Hub (**Project → Removed regions…**), for one
+  replicate in the Config Editor's regions grid or the QC Viewer, by editing
   `removed_regions.yaml` at the experiment directory's root, or in bulk from a
   `removed_regions.csv` spreadsheet that a Batch Run applies before it starts.
   Every fly in a removed region is excluded exactly as an automatically
@@ -1831,9 +1832,9 @@ because the reason is what makes the audit trail readable six months later.
 
 ### 9.2 Declaring a removal
 
-Three ways in, one source of truth.  The Hub window and the removal sheet both
-end up writing the same file: `removed_regions.yaml` inside the experiment
-directory.
+Several ways in, one source of truth.  The Hub window, the removal sheet, and
+the Config Editor and QC Viewer for one replicate (§9.2.4) all end up writing
+the same file: `removed_regions.yaml` inside the experiment directory.
 
 #### 9.2.1 The Hub: Project → Removed regions…
 
@@ -1978,6 +1979,41 @@ does **not** un-remove anything; untick it in the window instead.
 Nothing in this path is ever fatal.  A row that matches nothing is counted and
 logged; a sheet that cannot be read at all is reported and the Batch Run
 continues.  One stale note must not kill ten Projects' worth of overnight work.
+
+#### 9.2.4 One replicate: the Config Editor and the QC Viewer
+
+Two windows that open a single replicate have the same tick and reason, so a
+region can be removed where you are already looking at it (ADR-0021):
+
+- **Config Editor → Tracking regions.**  The **Removed** and **Reason** columns
+  at the right of each row.  They are not part of the config: **Save** writes
+  the config, then the removed regions, and the line under the table names the
+  file.  A removed region with no row (deleted, renamed, or never in the
+  design) is kept and listed there.  **Delete selected** deletes rows from the
+  config; it never removes a fly from the analysis.  This is also the window a
+  standalone experiment, which the Hub cannot load, has for its removals.
+- **QC Viewer → Removed regions**, under the trackers table.  One row per
+  region of the config, with the number of flies the recording has in it
+  (`no data` for an empty well).  Selecting a tracker selects its region.
+  **Save removed regions** writes the file and re-filters the loaded
+  experiment.  Closing or reloading with unsaved ticks asks first.  The
+  trackers table keeps showing a removed fly: QC describes the recording.
+
+A Reason can be typed once its region is ticked; blank is saved as
+`Undefined`.  Both windows write only the regions you changed in them, over the
+file as it is at the moment you save, so a removal declared meanwhile in the
+Hub, by a removal sheet, or in the other window is kept.
+
+Both save in the folder they were opened on.  For a replicate whose
+`tracking_member.yaml` names its recording's config (ADR-0020), that is still
+the replicate's folder, never the recording's.  The columns are greyed out,
+with the reason underneath, in a run folder of the lab's labdata store (it
+holds `run.yaml`), whose `removed_regions.yaml` is the run's own record, and
+when the file cannot be read, so that saving never overwrites it.
+
+These windows run as separate programs, so a Hub with the same replicate loaded
+does not re-filter it when they save: its plots show the fly until the
+replicate is loaded again.
 
 ### 9.3 What a removal does to the analysis
 

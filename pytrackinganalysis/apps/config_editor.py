@@ -94,6 +94,9 @@ class ConfigEditorWindow(QMainWindow):
         # Resolve initial path: explicit arg, cwd, or package default.
         if initial_path:
             candidate = Path(initial_path).expanduser().resolve()
+            ## The replicate's own folder: where its removed_regions.yaml
+            ## is, even when its config is its recording's (ADR-0021).
+            replicate = candidate if candidate.is_dir() else candidate.parent
             if candidate.is_dir():
                 ## A replicate holding tracking_member.yaml reads its
                 ## recording's own config, which is the one to open and save
@@ -107,7 +110,7 @@ class ConfigEditorWindow(QMainWindow):
                     return
                 candidate = Path(named.path)
             if candidate.exists():
-                self._load_path(candidate)
+                self._load_path(candidate, replicate=replicate)
                 return
             # An explicit target that doesn't exist yet stays the target: the
             # cwd/package fallback below would silently open an unrelated
@@ -115,6 +118,7 @@ class ConfigEditorWindow(QMainWindow):
             self._current_path = candidate
             self._remember_as_read(candidate, None)
             self._about_tab.set_location(candidate)
+            self._tracking_tab.set_removals_location(replicate)
             self._set_title(candidate)
             return
 
@@ -311,7 +315,10 @@ class ConfigEditorWindow(QMainWindow):
         if path:
             self._load_path(Path(path))
 
-    def _load_path(self, path: Path) -> None:
+    def _load_path(self, path: Path, replicate=None) -> None:
+        """Open the config at *path*. *replicate* is the folder whose removed
+        regions the Tracking Regions tab shows: the config's own folder unless
+        the window was opened on a replicate that reads another's config."""
         try:
             with open(path, encoding="utf-8") as f:
                 text = f.read()
@@ -326,6 +333,8 @@ class ConfigEditorWindow(QMainWindow):
         self._tracking_tab.set_regions_source(
             lambda: project_mod.tracking_regions_in_data(experiment_dir))
         self._about_tab.set_location(path)
+        self._tracking_tab.set_removals_location(
+            Path(replicate) if replicate is not None else path.parent)
         self._loading = True
         try:
             self._global_tab.load(config)
@@ -369,6 +378,9 @@ class ConfigEditorWindow(QMainWindow):
             self._write(Path(path))
             self._current_path = Path(path)
             self._about_tab.set_location(self._current_path)
+            ## The removals just saved were the old folder's; the new
+            ## config's folder has its own.
+            self._tracking_tab.set_removals_location(self._current_path.parent)
             self._set_title(self._current_path)
 
     def _maybe_seed_required_regions(self) -> None:
@@ -505,8 +517,19 @@ class ConfigEditorWindow(QMainWindow):
         self._remember_as_read(path, self._text_on_disk(path))
         self._about_tab.note_saved(config)
         self._disk_text = yaml.safe_dump(config, default_flow_style=False, sort_keys=False)
+        ## The replicate's removed regions are a file of their own, written
+        ## only once the config is (ADR-0021).
+        try:
+            removals_saved = self._tracking_tab.save_removals()
+        except (OSError, ValueError) as err:
+            removals_saved = ""
+            QMessageBox.warning(
+                self, "Removed regions not saved",
+                f"The config was saved, but the removed regions were not:\n\n{err}")
         self._refresh_dirty()
         message = f"Config saved to:\n{path}"
+        if removals_saved:
+            message += f"\n\n{removals_saved}"
         ## Advice, never a refusal (an absolute data_folder: still works, and
         ## nothing in about: is ever more than a note).
         notes = config_validation.config_warnings(config)
@@ -708,7 +731,7 @@ class ConfigEditorWindow(QMainWindow):
             )
         except Exception:  # noqa: BLE001
             return
-        dirty = text != self._disk_text
+        dirty = text != self._disk_text or self._tracking_tab.removals_changed()
         self._dirty_label.setText("●  unsaved changes" if dirty else "")
 
     def _set_title(self, path: Path | None) -> None:

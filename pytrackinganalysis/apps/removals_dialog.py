@@ -164,6 +164,7 @@ class RemovalsDialog(QDialog):
         outer.addWidget(self.table, 1)
 
         self.status = QLabel("")
+        self.status.setWordWrap(True)
         self.status.setStyleSheet("color: palette(mid); font-style: italic;")
         outer.addWidget(self.status)
 
@@ -187,19 +188,28 @@ class RemovalsDialog(QDialog):
         #: experiment -> declaration as it stands on disk, so Save writes only
         #: the replicates that actually changed.
         self._declared: dict[str, dict] = {}
+        #: experiment -> why its file must not be written (ADR-0021): one that
+        #: cannot be read reads as {}, and saving over it would delete what
+        #: the experimenter wrote. Its rows are greyed out.
+        self._refused: dict[str, str] = {}
         self.table.setRowCount(0)
         for experiment, region, treatment, has_data in rows:
             declared = self._declared.get(experiment)
             if declared is None:
-                declared = removals.read_removals(
-                    os.path.join(self.project_dir, experiment))
+                experiment_dir = os.path.join(self.project_dir, experiment)
+                declared = removals.read_removals(experiment_dir)
                 self._declared[experiment] = declared
+                refusal = removals.edit_refusal(experiment_dir)
+                if refusal:
+                    self._refused[experiment] = refusal
+            editable = experiment not in self._refused
             row = self.table.rowCount()
             self.table.insertRow(row)
 
             check = QTableWidgetItem()
             check.setFlags(Qt.ItemFlag.ItemIsUserCheckable
-                           | Qt.ItemFlag.ItemIsEnabled)
+                           | Qt.ItemFlag.ItemIsEnabled
+                           if editable else Qt.ItemFlag.ItemIsSelectable)
             check.setCheckState(Qt.CheckState.Checked if region in declared
                                 else Qt.CheckState.Unchecked)
             self.table.setItem(row, _REMOVE, check)
@@ -211,14 +221,20 @@ class RemovalsDialog(QDialog):
                 item.setFlags(Qt.ItemFlag.ItemIsEnabled
                               | Qt.ItemFlag.ItemIsSelectable)
                 self.table.setItem(row, col, item)
-            self.table.setItem(row, _REASON,
-                               QTableWidgetItem(declared.get(region, "")))
+            reason = QTableWidgetItem(declared.get(region, ""))
+            if not editable:
+                reason.setFlags(Qt.ItemFlag.ItemIsSelectable)
+            self.table.setItem(row, _REASON, reason)
 
         experiments = len(self._declared)
         declared_total = sum(len(d) for d in self._declared.values())
         self.status.setText(
             f"{self.table.rowCount()} region(s) across {experiments} "
             f"replicate(s); {declared_total} currently removed.")
+        if self._refused:
+            self.status.setText(
+                self.status.text() + " Greyed out, not editable here: "
+                + " ".join(self._refused.values()))
         if not self.table.rowCount():
             self.status.setText(
                 "No replicate in this Project has a tracking_config.yaml with "
@@ -257,6 +273,11 @@ class RemovalsDialog(QDialog):
             if declared == self._declared.get(experiment, {}):
                 continue
             experiment_dir = os.path.join(self.project_dir, experiment)
+            ## Checked again here: the file may have broken since the load.
+            refusal = removals.edit_refusal(experiment_dir)
+            if refusal:
+                failures.append(f"{experiment}: {refusal}")
+                continue
             try:
                 path = removals.write_removals(experiment_dir, declared)
             except OSError as err:

@@ -148,6 +148,75 @@ _SIDECAR_HEADER = (
 
 
 # ---------------------------------------------------------------------------
+# One replicate's window: the Config Editor's grid and the QC Viewer (ADR-0021)
+# ---------------------------------------------------------------------------
+
+#: A run folder in the lab's labdata store holds this beside its config. Its
+#: ``removed_regions.yaml`` is the run's own declaration, which labdata reads
+#: only when its record is refreshed from the files, and locks a week after
+#: the run is registered. So no window here writes it: an analysis of the run
+#: declares its removals in its own replicate folder.
+LABSTORE_RUN_MARKER = "run.yaml"
+
+
+def normalized(declared) -> dict:
+    """*declared* as it would be written: names and reasons stripped, a blank
+    reason :data:`DEFAULT_REASON`, a blank name left out."""
+    return {str(region).strip(): (str(reason or "").strip() or DEFAULT_REASON)
+            for region, reason in (declared or {}).items() if str(region).strip()}
+
+
+def edit_refusal(experiment_dir) -> str:
+    """Why a window must not edit the declaration in *experiment_dir*, or
+    ``""`` when it may.
+
+    Two folders are refused: a labdata run folder (:data:`LABSTORE_RUN_MARKER`),
+    and one whose ``removed_regions.yaml`` cannot be read as a declaration,
+    since writing over it would delete what the experimenter wrote.
+    """
+    if experiment_dir is None:
+        return "Save the config first: removals are kept beside it."
+    if os.path.isfile(os.path.join(str(experiment_dir), LABSTORE_RUN_MARKER)):
+        return (f"{experiment_dir} is a run folder in the lab's store, whose "
+                f"{REMOVALS_FILENAME} is the run's own record. Open the "
+                "replicate folder of an analysis to remove regions there.")
+    if not is_readable_declaration(experiment_dir):
+        return (f"{removals_path(experiment_dir)} cannot be read as a list of "
+                "removed regions. Fix or delete it by hand first: saving here "
+                "would overwrite it.")
+    return ""
+
+
+def update_removals(experiment_dir, before, after) -> dict:
+    """Write one window's edits into *experiment_dir*'s declaration, and return
+    the declaration as it now stands.
+
+    *before* is the declaration as the window read it and *after* is what the
+    window shows now. Only a region where the two differ is written, over the
+    file as it is at this moment, so whatever another writer declared since
+    the window read it (the Hub's removals window, a Removal Sheet) is kept.
+    Nothing is written when nothing changes. Raises :class:`ValueError` when
+    :func:`edit_refusal` refuses the folder.
+    """
+    refusal = edit_refusal(experiment_dir)
+    if refusal:
+        raise ValueError(refusal)
+    before, after = normalized(before), normalized(after)
+    current = read_removals(experiment_dir)
+    merged = dict(current)
+    for region in [*before, *(name for name in after if name not in before)]:
+        if before.get(region) == after.get(region):
+            continue
+        if region in after:
+            merged[region] = after[region]
+        else:
+            merged.pop(region, None)
+    if merged != current:
+        write_removals(experiment_dir, merged)
+    return merged
+
+
+# ---------------------------------------------------------------------------
 # Region -> tracker resolution
 # ---------------------------------------------------------------------------
 

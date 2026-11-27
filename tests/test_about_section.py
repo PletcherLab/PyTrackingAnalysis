@@ -28,6 +28,10 @@ from test_experiment_integration import write_project
 #: Fixed by the shared contract, so spelled out here rather than imported.
 KEY = "about"
 
+#: What the About tab's Organism field holds when the file names none, and so
+#: what the first edit to such a section saves with the rest of it.
+FLY = {"organism": "Drosophila melanogaster"}
+
 #: The design every synthetic recording here declares; ``write_project``
 #: assigns its regions to these two levels.
 FACTORS = {"Genotype": ["Ctrl", "Treated"]}
@@ -1036,9 +1040,10 @@ def test_t2_an_edited_section_is_written_in_the_contracts_order(tmp_path, open_e
     window._save()
 
     saved = read_config(member)[KEY]
-    assert list(saved) == ["run", "title", "experimenter", "sex", "protocol", "notes",
-                           "factors", "x_lab"]
+    assert list(saved) == ["run", "title", "experimenter", "organism", "sex", "protocol",
+                           "notes", "factors", "x_lab"]
     assert saved == {
+        **FLY,
         "run": "R-1", "title": "T", "experimenter": "atester", "sex": ["female"],
         "protocol": {"name": "Valence two-choice"}, "notes": "N",
         "factors": {"Genotype": {"kind": "genotype", "levels": {"Ctrl": "w1118"},
@@ -1053,7 +1058,7 @@ def test_t2_a_new_section_is_written_at_the_top_of_the_file(tmp_path, open_edito
     window._about_tab.title.setText("A first title")
     window._save()
     assert list(read_config(plain)) == [KEY, "global", "tracking_regions"]
-    assert read_config(plain)[KEY] == {"title": "A first title"}
+    assert read_config(plain)[KEY] == {"title": "A first title", **FLY}
 
     ## After data_folder: when the file leads with one, as a catalogue writes it.
     member = tmp_path / "Member"
@@ -1078,10 +1083,36 @@ def test_t2_blanking_every_field_writes_no_section(tmp_path, open_editor):
     tab.purpose.clear()
     tab.sex_checks["male"].setChecked(False)
     tab.protocol_edits["name"].clear()
+    tab.organism.clear()                                     # the default is a field too
 
     assert KEY not in window._dump_config()
     window._save()
     assert KEY not in read_config(member)
+
+
+def test_the_organism_defaults_to_drosophila_melanogaster(tmp_path, open_editor):
+    """The Organism field holds the default whenever the file names none, yet
+    a file only opened is still written back as it was."""
+    plain = recording(tmp_path / "Plain")
+    window = open_editor(plain)
+    tab = window._about_tab
+    assert tab.organism.text() == FLY["organism"]            # typed in, not a placeholder
+    assert KEY not in window._dump_config() and not is_dirty(window)
+    window._save()
+    assert KEY not in read_config(plain)
+
+    ## A file that names another organism shows it, and opening the next file
+    ## brings the default back.
+    other = recording(tmp_path / "Other", about={"organism": "D. simulans"})
+    window._load_path(other / "tracking_config.yaml")
+    assert tab.organism.text() == "D. simulans"
+    window._load_path(plain / "tracking_config.yaml")
+    assert tab.organism.text() == FLY["organism"]
+
+    ## Cleared on purpose, it is not saved.
+    tab.organism.clear()
+    tab.title.setText("T")
+    assert window._dump_config()[KEY] == {"title": "T"}
 
 
 def test_t2_what_the_form_has_no_field_for_outlives_blanking_it(tmp_path, open_editor):
@@ -1089,7 +1120,7 @@ def test_t2_what_the_form_has_no_field_for_outlives_blanking_it(tmp_path, open_e
                                                "x_lab": {"a": 1}})
     window = open_editor(member)
     window._about_tab.title.clear()
-    assert window._dump_config()[KEY] == {"run": "R-1", "x_lab": {"a": 1}}
+    assert window._dump_config()[KEY] == {"run": "R-1", **FLY, "x_lab": {"a": 1}}
 
 
 def test_the_title_count_turns_at_the_limit_and_nothing_is_refused(
@@ -1105,7 +1136,7 @@ def test_the_title_count_turns_at_the_limit_and_nothing_is_refused(
     assert tab.title_count.text() == "61/60" and tab.title_count.styleSheet()
     window._save()
 
-    assert read_config(member)[KEY] == {"title": "x" * 61}   # saved all the same
+    assert read_config(member)[KEY] == {"title": "x" * 61, **FLY}   # saved all the same
     [saved] = dialogs["information"]
     assert "about.title is 61 characters" in saved[2]        # and said, as a note
     assert not dialogs["warning"] and not dialogs["critical"]
@@ -1153,10 +1184,10 @@ def test_after_a_save_untouched_means_as_last_saved(tmp_path, open_editor):
 
     tab.title.setText("T2")
     window._save()
-    assert read_config(member)[KEY] == {"title": "T2", "sex": ["female"]}
+    assert read_config(member)[KEY] == {"title": "T2", **FLY, "sex": ["female"]}
 
     tab.title.setText("T")
-    assert window._dump_config()[KEY] == {"title": "T", "sex": ["female"]}
+    assert window._dump_config()[KEY] == {"title": "T", **FLY, "sex": ["female"]}
     tab.title.setText("T2")
     assert not is_dirty(window)
 
@@ -1222,7 +1253,7 @@ def test_t3_what_was_typed_is_kept_as_the_factors_change(tmp_path, open_editor):
     assert tab.kinds() == {"Genotype": "genotype", "Sex": ""}
     tab.meaning_edit("Sex", "Female").setText("virgin")
     tab.kind_combo("Sex").setCurrentIndex(tab.kind_combo("Sex").findData("sex"))
-    assert window._dump_config()[KEY] == {"factors": {
+    assert window._dump_config()[KEY] == {**FLY, "factors": {
         "Genotype": {"kind": "genotype", "levels": {"Ctrl": "w1118"}},
         "Sex": {"kind": "sex", "levels": {"Female": "virgin"}}}}
 
@@ -1293,6 +1324,7 @@ def test_other_values_the_form_has_no_widget_for_are_kept(tmp_path, open_editor)
     tab.sex_checks["male"].setChecked(True)
 
     assert window._dump_config()[KEY] == {
+        **FLY,
         "sex": ["female", "male", "hermaphrodite"],
         "protocol": {"name": "P", "x_doi": "10.1/x"},
         "factors": {"Genotype": {"kind": "strain"}}}
@@ -1544,7 +1576,7 @@ def test_a5_overwriting_is_the_persons_choice_and_is_asked_once(
     disk_change.answer["choose"] = "Overwrite"
     window._save()
 
-    mine = {"title": "As first typed", "purpose": "Typed in this window."}
+    mine = {"title": "As first typed", "purpose": "Typed in this window.", **FLY}
     assert read_config(member)[KEY] == mine
     assert len(disk_change.asked) == 1 and len(dialogs["information"]) == 1
 
@@ -1707,7 +1739,7 @@ def test_a_folder_with_a_recording_and_no_config_can_be_described(
     assert config[KEY] == {
         "title": "Light preference, MBON10 silenced, replicate 1",
         "purpose": "Whether silencing MBON10 changes the preference for light.",
-        "experimenter": "atester", "sex": ["female"]}
+        "experimenter": "atester", **FLY, "sex": ["female"]}
     ## Describing a folder reads no recording and makes nothing but the config.
     assert sorted(entry.name for entry in folder.iterdir()) == \
         ["data", "tracking_config.yaml"]

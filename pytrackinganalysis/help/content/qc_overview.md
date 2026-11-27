@@ -30,6 +30,12 @@ Select a tracker to update the plot tabs:
 - **X / Y vs time** - position timelines.
 - **Data quality timeline** - frame-by-frame quality categories.
 
+## Removed regions
+
+Under the trackers table, one row per tracking region of the replicate's config, with the number of flies the recording has in it (`no data` for an empty well). Tick a region to leave every fly in it out of the analysis and say why; **Save removed regions** writes `removed_regions.yaml` in the replicate's folder and re-filters the loaded experiment. Selecting a tracker selects its region. Closing or reloading with unsaved ticks asks first.
+
+The trackers table keeps showing a removed fly: QC describes the recording, not the analysis population. Saved results change once the replicate is analyzed again. See **Removed regions**.
+
 ## Export
 
 **Export data_quality.csv** writes the current table for external review. Running QC from the Hub also writes `qc/<experiment>_data_quality.csv`.

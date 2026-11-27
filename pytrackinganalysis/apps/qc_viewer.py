@@ -6,7 +6,10 @@ Loads an :class:`Experiment` from a project directory and renders:
   %Indiscernible, start/end minutes (colour-coded green / red against a
   user-configurable qc_cutoff);
 * on tracker selection, :class:`PlotDock` tabs with XY trajectory, X/Y
-  vs time, cumulative distance, and a data-quality timeline.
+  vs time, cumulative distance, and a data-quality timeline;
+* the replicate's removed regions, ticked here while looking at its data and
+  saved to its ``removed_regions.yaml`` (ADR-0021). The table above still
+  shows a removed fly: quality control describes the recording.
 
 Heavy reuse of :meth:`Arena.get_data_quality` and per-tracker
 ``rawdata``; new per-tracker plots are built locally (not through
@@ -54,6 +57,7 @@ from PyQt6.QtWidgets import (
 from .. import Experiment as ExperimentMod
 from .. import removals
 from ..help import make_topbar_help_button
+from ._removed_regions_panel import RemovedRegionsPanel, config_region_names
 from .common import TaskWorker, shutdown_worker
 from ..ui import (
     ActionButton,
@@ -221,6 +225,21 @@ class QcViewerWindow(QMainWindow):
 
         left_lay.addWidget(trackers_card, 1)
 
+        removals_card = Card(
+            "Removed regions",
+            category=Category.QC,
+            subtitle=(
+                "Tick a region to leave every fly in it out of the analysis, "
+                "and say why: death, escape, an empty well. Selecting a tracker "
+                "above selects its region here."
+            ),
+            icon_name="qc",
+        )
+        self._removals_panel = RemovedRegionsPanel()
+        self._removals_panel.saved.connect(self._on_removals_saved)
+        removals_card.add_body(self._removals_panel)
+        left_lay.addWidget(removals_card)
+
         tools_card = Card(
             "Export",
             category=Category.TOOLS,
@@ -285,6 +304,9 @@ class QcViewerWindow(QMainWindow):
         if self._loader is not None and self._loader.isRunning():
             self._log.append_line("A project is already loading; ignoring the request.")
             return
+        if not self._settle_unsaved_removals():
+            return
+        self._removals_panel.clear()
 
         self._project_dir = path
         self._path_lbl.setText(path.name or str(path))
@@ -325,6 +347,8 @@ class QcViewerWindow(QMainWindow):
         self._log.append_line(str(self._exp))
         self._refresh_table()
         self._show_qc_artifacts()
+        self._removals_panel.load(path, config_region_names(path),
+                                  list(exp.arena.trackers.keys()))
 
     def _apply_qc_cutoff(self, exp) -> None:
         """Adopt the project's QC cutoff for the row tints and the summary line."""
@@ -445,7 +469,43 @@ class QcViewerWindow(QMainWindow):
         if df.empty:
             return
         tracker_name = str(df.iloc[sel[0].row()]["Tracker"])
+        self._removals_panel.select_region_of(tracker_name)
         self._show_tracker_plots(tracker_name)
+
+    # ==================================================================
+    # Removed regions (ADR-0021)
+    # ==================================================================
+
+    def _on_removals_saved(self, declared: dict) -> None:
+        """The replicate's removals were just written: say so, and re-apply
+        them to the loaded experiment, as the Hub's window does."""
+        if self._project_dir is not None:
+            self._log.append_line(
+                f"[removals] saved {len(declared)} removed region(s) for "
+                f"{self._project_dir.name}. Re-run the analysis for the change "
+                "to reach saved results.")
+        if self._exp is None:
+            return
+        try:
+            self._exp.refresh_exclusions()
+            for line in self._exp.exclusion_notes():
+                self._log.append_line(line)
+        except Exception as err:  # noqa: BLE001 — said, never raised in a slot
+            self._log_issue(f"[removals] could not re-apply: {err}")
+
+    def _settle_unsaved_removals(self) -> bool:
+        """Ask what to do with removed regions changed and not saved. False
+        when the person would rather stay."""
+        if not self._removals_panel.has_unsaved_changes():
+            return True
+        buttons = QMessageBox.StandardButton
+        answer = QMessageBox.question(
+            self, "Removed regions",
+            "The removed regions were changed and not saved. Save them?",
+            buttons.Save | buttons.Discard | buttons.Cancel, buttons.Save)
+        if answer == buttons.Save:
+            return self._removals_panel.save()
+        return answer == buttons.Discard
 
     # ==================================================================
     # Per-tracker plots
@@ -595,6 +655,9 @@ class QcViewerWindow(QMainWindow):
         whole of that window; closing it used to destroy the running QThread
         and abort the process.
         """
+        if not self._settle_unsaved_removals():
+            event.ignore()
+            return
         loader = self._loader
         if loader is not None and loader.isRunning():
             self._log.append_line("Waiting for the project load to finish before closing…")

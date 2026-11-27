@@ -1,5 +1,8 @@
 # Experimenter-declared region removal is a sidecar the Batch sheet writes into
 
+Amended by ADR-0021: one replicate's removals are also ticked in the Config
+Editor's regions grid and the QC Viewer.
+
 ## Context
 
 Flies die, escape, or were never loaded — outcomes only the experimenter

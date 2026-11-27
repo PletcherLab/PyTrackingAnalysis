@@ -44,6 +44,7 @@ from PyQt6.QtWidgets import (
 from .. import Parameters as _ParametersMod
 from .. import about as about_mod
 from .. import experiment_types as _et
+from .. import removals
 from ..help import HelpButton
 from ._hypotheses import HypothesesEditor
 
@@ -1184,10 +1185,17 @@ class TrackingRegionsTab(QWidget):
     YAML format is unchanged (``experimental_factors`` is a comma-joined string);
     we map each token to whichever factor's levels it belongs to on load, and
     re-join in factor declaration order on dump.
+
+    The last two columns, Removed and Reason, are not the config's: they are
+    this replicate's ``removed_regions.yaml`` (ADR-0010, ADR-0021), which the
+    window saves beside the config's own save. They are kept by region name,
+    not by row, so they outlive every rebuild of the rows. A declared region
+    with no row (deleted, renamed, or never in the design) is kept as it is
+    and listed under the table.
     """
 
     _FIXED_LEFT = 1   # "Region name"
-    _FIXED_RIGHT = 2  # "X multiplier", "Y multiplier"
+    _FIXED_RIGHT = 4  # "X multiplier", "Y multiplier", "Removed", "Reason"
 
     def __init__(self, global_tab: GlobalTab):
         super().__init__()
@@ -1198,6 +1206,18 @@ class TrackingRegionsTab(QWidget):
         # merges over these so per-region keys this tab does not render
         # (``notes:``, anything hand-added) survive a load/save round trip.
         self._loaded_regions: dict[str, dict] = {}
+        ## The replicate's removed regions (ADR-0021). The folder is the one
+        ## the window was opened on, which for a replicate reading its
+        ## recording's config (ADR-0020) is not the config's folder.
+        self._removals_dir: str | None = None
+        self._removals_refusal = removals.edit_refusal(None)
+        #: Region → reason as read, and as the table has it now ("" while
+        #: ticked with nothing typed, saved as Undefined).
+        self._removed_at_load: dict[str, str] = {}
+        self._removed: dict[str, str] = {}
+        #: True while cells are being set from :attr:`_removed`, so the
+        #: itemChanged that causes is not taken for an edit.
+        self._rendering = False
 
         layout = QVBoxLayout(self)
 
@@ -1216,7 +1236,12 @@ class TrackingRegionsTab(QWidget):
         btn_row = QHBoxLayout()
         add_btn = QPushButton("Add region")
         add_btn.clicked.connect(lambda: self._add_row())
-        rm_btn = QPushButton("Remove selected")
+        ## Not "Remove": that word is the Removed column's, which leaves the
+        ## region in the design and its flies out of the analysis.
+        rm_btn = QPushButton("Delete selected")
+        rm_btn.setToolTip(
+            "Delete the selected regions from this config. To leave a region's "
+            "flies out of the analysis instead, tick Removed.")
         rm_btn.clicked.connect(self._remove_row)
         self.count_spin = QSpinBox()
         self.count_spin.setRange(1, 200)
@@ -1244,7 +1269,13 @@ class TrackingRegionsTab(QWidget):
         layout.addLayout(btn_row)
 
         self.table = QTableWidget(0, self._FIXED_LEFT + self._FIXED_RIGHT)
+        self.table.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self.table)
+        self.removals_note = QLabel("")
+        self.removals_note.setWordWrap(True)
+        self.removals_note.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self.removals_note)
 
         # Pull initial factor list (will be empty until GlobalTab loads), then
         # listen for changes so columns track factor edits live.
@@ -1265,9 +1296,16 @@ class TrackingRegionsTab(QWidget):
     def _y_col(self) -> int:
         return self._x_col() + 1
 
+    def _removed_col(self) -> int:
+        return self._y_col() + 1
+
+    def _reason_col(self) -> int:
+        return self._y_col() + 2
+
     def _apply_columns(self) -> None:
         """Set the table headers + resize modes for the current factor list."""
-        headers = ["Region name"] + self._factor_names() + ["X multiplier", "Y multiplier"]
+        headers = (["Region name"] + self._factor_names()
+                   + ["X multiplier", "Y multiplier", "Removed", "Reason"])
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         h = self.table.horizontalHeader()
@@ -1276,6 +1314,21 @@ class TrackingRegionsTab(QWidget):
             h.setSectionResizeMode(self._FIXED_LEFT + i, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(self._x_col(), QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(self._y_col(), QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(self._removed_col(), QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(self._reason_col(), QHeaderView.ResizeMode.Stretch)
+        tips = {
+            self._removed_col(): (
+                "Tick to leave every fly in this region out of the analysis: "
+                "death, escape, an empty well. Saved to removed_regions.yaml in "
+                "this replicate's folder, not to the config."),
+            self._reason_col(): (
+                "Why the region was removed, in your own words. Left blank, "
+                "it is saved as Undefined."),
+        }
+        for col, tip in tips.items():
+            header_item = self.table.horizontalHeaderItem(col)
+            if header_item is not None:
+                header_item.setToolTip(tip)
 
     def _on_factors_changed(self, factors: dict[str, list[str]]) -> None:
         """Rebuild columns + cells when the Global tab's factors change."""
@@ -1359,11 +1412,151 @@ class TrackingRegionsTab(QWidget):
         yc.setCurrentText(str(y))
         self.table.setCellWidget(r, self._x_col(), xc)
         self.table.setCellWidget(r, self._y_col(), yc)
+        self._render_removal(r)
+        self._show_removals_note()
 
     def _remove_row(self) -> None:
         rows = {idx.row() for idx in self.table.selectedIndexes()}
         for r in sorted(rows, reverse=True):
             self.table.removeRow(r)
+        ## A deleted region's removal is not this button's to drop: it is
+        ## kept, and listed under the table.
+        self._show_removals_note()
+
+    # ------------------------------------------------------------------
+    # Removed regions (ADR-0021)
+    # ------------------------------------------------------------------
+
+    def set_removals_location(self, experiment_dir) -> None:
+        """Read the removed regions of the replicate in *experiment_dir*
+        (None while the window has no folder) and show them.
+
+        A folder the window must not write (a labdata run folder, or one whose
+        file cannot be read: :func:`removals.edit_refusal`) still shows what
+        it declares, with the columns greyed out and the reason underneath.
+        """
+        self._removals_dir = None if experiment_dir is None else str(experiment_dir)
+        self._removals_refusal = removals.edit_refusal(self._removals_dir)
+        declared = (removals.read_removals(self._removals_dir)
+                    if self._removals_dir is not None else {})
+        self._removed_at_load = dict(declared)
+        self._removed = dict(declared)
+        for row in range(self.table.rowCount()):
+            self._render_removal(row)
+        self._show_removals_note()
+
+    def removed_regions(self) -> dict[str, str]:
+        """Region → reason as the table has it now, as it would be saved."""
+        return removals.normalized(self._removed)
+
+    def removals_changed(self) -> bool:
+        """True when the table's removals differ from what was read."""
+        return (not self._removals_refusal
+                and self.removed_regions() != removals.normalized(self._removed_at_load))
+
+    def save_removals(self) -> str:
+        """Write this table's removal edits to the replicate's
+        ``removed_regions.yaml``, over the file as it is now, and show the
+        result. Returns a line for the save message, or ``""`` when there
+        was nothing to save. Raises ``OSError`` or ``ValueError``.
+        """
+        if not self.removals_changed():
+            return ""
+        merged = removals.update_removals(
+            self._removals_dir, self._removed_at_load, self._removed)
+        self._removed_at_load = dict(merged)
+        self._removed = dict(merged)
+        for row in range(self.table.rowCount()):
+            self._render_removal(row)
+        self._show_removals_note()
+        path = removals.removals_path(self._removals_dir)
+        if not merged:
+            return f"No region is removed now, so {path} was deleted."
+        return f"Removed regions ({len(merged)}) saved to:\n{path}"
+
+    def _row_name(self, row: int) -> str:
+        item = self.table.item(row, 0)
+        return item.text().strip() if item else ""
+
+    def _render_removal(self, row: int) -> None:
+        """Set the row's Removed and Reason cells from :attr:`_removed`.
+
+        Existing cells are updated, never replaced: this also runs from
+        itemChanged, whose item must outlive the slot.
+        """
+        name = self._row_name(row)
+        ticked = bool(name) and name in self._removed
+        editable = bool(name) and not self._removals_refusal
+        self._rendering = True
+        try:
+            check = self.table.item(row, self._removed_col())
+            if check is None:
+                check = QTableWidgetItem()
+                self.table.setItem(row, self._removed_col(), check)
+            flags = Qt.ItemFlag.ItemIsSelectable
+            if editable:
+                flags |= Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
+            check.setFlags(flags)
+            check.setCheckState(Qt.CheckState.Checked if ticked
+                                else Qt.CheckState.Unchecked)
+
+            reason = self.table.item(row, self._reason_col())
+            if reason is None:
+                reason = QTableWidgetItem()
+                self.table.setItem(row, self._reason_col(), reason)
+            ## Only a ticked region has a reason to edit.
+            flags = Qt.ItemFlag.ItemIsSelectable
+            if editable and ticked:
+                flags |= Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable
+            reason.setFlags(flags)
+            reason.setText(self._removed.get(name, "") if ticked else "")
+            reason.setToolTip("Saved as Undefined unless you say why."
+                              if ticked and not self._removed.get(name) else "")
+        finally:
+            self._rendering = False
+
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        if self._rendering:
+            return
+        row, col = item.row(), item.column()
+        name = self._row_name(row)
+        if col == self._removed_col():
+            if item.checkState() == Qt.CheckState.Checked and name:
+                ## Ticked again: the reason it was read with comes back.
+                self._removed.setdefault(name, self._removed_at_load.get(name, ""))
+            else:
+                self._removed.pop(name, None)
+        elif col == self._reason_col():
+            if name in self._removed:
+                self._removed[name] = item.text().strip()
+            return
+        elif col != 0:
+            return
+        ## A tick, or a renamed row, which now shows what its new name
+        ## declares: every row of that name follows.
+        for other in range(self.table.rowCount()):
+            if other == row or self._row_name(other) == name:
+                self._render_removal(other)
+        self._show_removals_note()
+
+    def _show_removals_note(self) -> None:
+        """Say under the table where removals are saved, why they cannot be
+        here, and which declared regions have no row."""
+        if self._removals_refusal:
+            text = ("Removed regions cannot be edited here. "
+                    + self._removals_refusal)
+        else:
+            text = ("Tick Removed to leave every fly in a region out of the "
+                    "analysis, and say why. Saved to "
+                    f"{removals.removals_path(self._removals_dir)}, not to the "
+                    "config.")
+        shown = set(self.region_names())
+        unshown = [f"{name} ({removals.normalized({name: reason})[name]})"
+                   for name, reason in self._removed.items() if name not in shown]
+        if unshown:
+            text += (" Also removed, with no row here, and kept as they are: "
+                     + ", ".join(unshown) + ".")
+        self.removals_note.setText(text)
 
     def _bulk_generate(self) -> None:
         self.table.setRowCount(0)
@@ -1629,6 +1822,10 @@ class CountingRegionsTab(QWidget):
 #: A config with no ``about:`` key at all, as opposed to one whose key is empty.
 _NO_ABOUT = object()
 
+#: What the Organism field holds when the file names none. It is typed in, not
+#: a placeholder, so the first edit to the section saves it with the rest.
+DEFAULT_ORGANISM = "Drosophila melanogaster"
+
 #: What the About tab is for (ADR-0019).
 ABOUT_INTRO = (
     "What this recording is, in your own words. Every field is optional and "
@@ -1783,8 +1980,7 @@ class AboutTab(QWidget):
         form.addRow("Run:", self.run_value)
 
         form.addRow(_heading("The flies"))
-        self.organism = QLineEdit()
-        self.organism.setPlaceholderText("Drosophila melanogaster")
+        self.organism = QLineEdit(DEFAULT_ORGANISM)
         form.addRow("Organism:", self.organism)
         sex_row = QHBoxLayout()
         self.sex_checks: dict[str, QCheckBox] = {}
@@ -1998,6 +2194,10 @@ class AboutTab(QWidget):
                 widget.setPlainText(text)
             else:
                 widget.setText(text)
+        ## Filled before load() notes what the form says, so a file that names
+        ## no organism still opens untouched and is written back as it was.
+        if not self.organism.text():
+            self.organism.setText(DEFAULT_ORGANISM)
         run = about_mod._text(section.get(about_mod.RUN_KEY))
         self.run_value.setText(run)
         self._form.setRowVisible(self.run_value, bool(run))

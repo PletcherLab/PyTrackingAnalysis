@@ -1,4 +1,64 @@
+# tracking_config.yaml — one recording's configuration (a commented template).
+#
+# It lives at the root of an Experiment Directory, beside:
+#   data/                 the DTrack export (unless data_folder: names another)
+#   removed_regions.yaml  tracking regions left out of the analysis, each with
+#                         a reason (docs/adr/0010, 0021). Never part of this
+#                         file: tick Removed on the Config Editor's Tracking
+#                         regions tab, or in the QC Viewer, to write it.
+#
+# A replicate in a Project may hold tracking_member.yaml instead of this file.
+# Its config: names the recording's own tracking_config.yaml, so a recording
+# has one config however many Projects analyse it (docs/adr/0020). Inside a
+# Project with a design, only the global: keys that describe the recording
+# (experiment_type, tracking_type, tracking_rig, fps, mm_per_pixel,
+# experimental_design_factors) are read from here, and must agree with the
+# design. Every other global: key is an analysis setting that comes from
+# project.yaml's design.
+
+# ── Optional: Data Folder (docs/adr/0018) ───────────────────────────────────
+#
+# Read the recording from another folder instead of the data/ beside this
+# file, such as a locked run folder several studies share. Relative to this
+# file's folder, with forward slashes. The folder is only read: analysis/,
+# qc/ and the report are still written beside this file.
+# data_folder: ../../../../../runs/tracking/2026/R-20261020-asmith-01/data
+
+# ── Optional: About the Recording (docs/adr/0019) ───────────────────────────
+#
+# What this recording is, in your own words, for whoever reads this file
+# later. Every key is optional, and no analysis reads any of it. The Config
+# Editor's About tab fills it in, with Organism starting as Drosophila
+# melanogaster. A catalogue that files the recording may add run: (its id
+# there) and registry terms beside a level's definition.
+# about:
+#   title: Starvation and sex, replicate 1
+#   purpose: Whether starvation changes how far flies walk.
+#   experimenter: your-name
+#   series: starvation-2026
+#   organism: Drosophila melanogaster
+#   sex: [female, male]
+#   age_at_start: 5-7 days
+#   protocol: {name: Open arena, version: "1", link: https://example.org/protocol}
+#   notes: Free text.
+#   factors:
+#     feeding:
+#       kind: diet          # genotype | treatment | diet | condition | sex | other
+#       levels:
+#         Starved: 24 h on 1% agar
+#         Control: standard food
+#     sex:
+#       kind: sex
+
 global:
+  # ── Experiment Type (docs/adr/0001) ───────────────────────────────────────
+  #
+  # A named assay bundle that owns the tracking type, the allowed rigs, the
+  # default phases and its quality criteria, and is validated when it loads.
+  # Options: Custom | Valence | PairedOpenField. Custom when omitted: the
+  # freeform behaviour driven by tracking_type below.
+  # experiment_type: Custom
+
   # ── Required ──────────────────────────────────────────────────────────────
   #
   # Type of tracking performed.
@@ -9,7 +69,7 @@ global:
   # Hardware rig used. Sets fps and mm_per_pixel automatically.
   # Options: small_arena | arena_max | colosseum | obscura | movie
   # Use 'movie' and supply fps + mm_per_pixel manually below.
-  tracking_rig: Colosseum
+  tracking_rig: colosseum
 
   # ── Experimental Design ───────────────────────────────────────────────────
   #
@@ -31,6 +91,28 @@ global:
   # Experiment Type's defaults (Valence: Acclimation / Experiment / Cooldown)
   # or plain minute ranges.
   # facet_labels: [Acclimation, Experiment, Cooldown]
+
+  # ── Optional: Quality Criteria ────────────────────────────────────────────
+  #
+  # Read by the Experiment Type that defines them; 0 turns each one off.
+  # Valence: flies with fewer transitions than this in the primary phase are
+  # excluded from every result and listed in <name>_Excluded.csv.
+  # min_transitions: 5
+  # Valence: flies averaging under this many mm/min in the first phase are
+  # flagged in LowMovementFlag, never removed.
+  # min_movement: 140
+  # Paired Open Field: a pair tracked for under this fraction of the primary
+  # phase is excluded, both flies.
+  # min_valid_fraction: 0.8
+
+  # ── Optional: Directional Hypotheses (Valence; docs/adr/0017) ─────────────
+  #
+  # Predictions made before the data existed, tested one-sided. Each names
+  # levels of one design factor (or one level against indifference); phases
+  # defaults to the primary phase.
+  # hypotheses:
+  # - expect: Starved > Control
+  #   phases: [Experiment]
 
   # ── Optional: Parameter Overrides ─────────────────────────────────────────
   #
@@ -72,6 +154,15 @@ global:
   # wall_zone_mm: 2.5
   # fly_length_mm: 2.5
   # fly_width_mm: 1.0
+
+# ── Tracking Regions ──────────────────────────────────────────────────────────
+#
+# One entry per tracking region (tube or well), named as DTrack names it.
+# experimental_factors: one level of each design factor, comma-separated; a
+# region left blank is unassigned and its flies are left out of the results.
+# x/y_location_multiplier: 1, or -1 to flip a mirrored arena's coordinates.
+# A region removed from the analysis stays here: removals are declared in
+# removed_regions.yaml (see the top of this file).
 tracking_regions:
   T_0:
     experimental_factors: Starved, Female
@@ -141,7 +232,7 @@ tracking_regions:
     experimental_factors: Control, Male
     x_location_multiplier: 1
     y_location_multiplier: 1
-  T_17: 
+  T_17:
     experimental_factors: Starved, Male
     x_location_multiplier: 1
     y_location_multiplier: 1
@@ -170,7 +261,10 @@ tracking_regions:
     x_location_multiplier: 1
     y_location_multiplier: 1
 
- # Counting regions are a dictionary with keys as the treatments and values as all the different regions in the datafile that correspond to each.
+# ── Counting Regions ──────────────────────────────────────────────────────────
+#
+# One entry per treatment label: alias lists every counting_region value in
+# the data file that means that treatment.
 counting_regions:
   Light:
     alias: Light, LL, L

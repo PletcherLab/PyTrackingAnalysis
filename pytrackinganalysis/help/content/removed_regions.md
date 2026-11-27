@@ -32,13 +32,24 @@ A **removed region** is a tracking region you declare out of the analysis, with 
 
 **Filter** narrows to one replicate or region; **Show removed only** reviews what is already declared. Only regions the config declares are listed, so the window opens instantly even for a Project of eighty replicates.
 
-**Save** writes one file per replicate you changed. **Cancel** discards. Unticking a region deletes its declaration - that is how you un-remove a fly, and it is deliberately explicit.
+**Save** writes one file per replicate you changed. **Cancel** discards. A replicate whose `removed_regions.yaml` cannot be read is greyed out, with the reason under the table: saving would overwrite what it says, so fix or delete it by hand first. Unticking a region deletes its declaration - that is how you un-remove a fly, and it is deliberately explicit.
 
 If the experiment you have loaded is one you changed, its data is re-filtered immediately: press a plot button straight afterwards and the fly is already gone.
 
+## One replicate at a time
+
+Two windows that show one replicate also have the same tick and reason, so you can remove a region where you happen to be looking at it:
+
+- **Config Editor** -> **Tracking regions** tab: the **Removed** and **Reason** columns at the right of each row. **Save** writes the config and then the removed regions. This is also how a standalone experiment that is not in a Project gets a window for its removals.
+- **QC Viewer** -> **Removed regions**, under the trackers table: one row per region, with the number of flies the recording has in it (`no data` for an empty well). Selecting a tracker selects its region. **Save removed regions** writes them and re-filters the loaded experiment; closing with unsaved ticks asks first.
+
+Both write only what you changed in them, over the file as it is when you save, so a removal declared meanwhile in another window or by a removal sheet is kept. A reason can be typed once its region is ticked. Unticking a region and ticking it again brings back the reason it was saved with.
+
+Both save to the folder they were opened on: the replicate's. For a replicate that reads its recording's config through `tracking_member.yaml`, that is still the replicate's folder, never the recording's. The columns are greyed out, with the reason underneath, when that folder is a run folder in the lab's labdata store (it holds `run.yaml`), or when its `removed_regions.yaml` cannot be read: saving would overwrite it, so fix or delete it by hand first.
+
 ## The file
 
-Saving writes `removed_regions.yaml` at the experiment directory's root, beside `tracking_config.yaml`:
+Saving writes `removed_regions.yaml` at the root of the replicate's folder: beside its `tracking_config.yaml`, or beside its `tracking_member.yaml` when it reads its recording's config:
 
 ```yaml
 removed_regions:
@@ -46,7 +57,7 @@ removed_regions:
   T_22: escaped during transfer
 ```
 
-Edit it by hand if you prefer - the window and the file are the same thing. Keys must match the config's region names exactly; one that matches nothing is warned about and ignored, never fatal. Deleting the file un-removes everything.
+Edit it by hand if you prefer - the windows and the file are the same thing. Keys must match the config's region names exactly; one that matches nothing is warned about and ignored, never fatal. Deleting the file un-removes everything.
 
 It is deliberately *not* part of `tracking_config.yaml`: that file is the design specification, and how a run turned out is not design. Because the declaration sits in the experiment directory, it travels with the recording wherever you copy it.
 
