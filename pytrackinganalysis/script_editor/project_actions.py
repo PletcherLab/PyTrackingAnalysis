@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from .. import layout
 from ..ui import Category
 from .actions import Action, ParamSpec
 
@@ -98,8 +99,7 @@ def _exec_run_in_experiments(params: dict, ctx: ProjectRunContext) -> None:
             ## step's (continue-on-error).
             import os
             try:
-                own = load_scripts(
-                    os.path.join(exp_dir, "tracking_config.yaml"))
+                own = load_scripts(layout.config_path(exp_dir))
             except Exception as err:  # noqa: BLE001
                 failures.append(f"{exp_name}: unreadable scripts — {err}")
                 ctx.log(f"[{exp_name}] FAILED to read scripts: {err}")
@@ -471,8 +471,7 @@ def preflight_project_script_issues(script: dict, project) -> list[str]:
     known = list(getattr(project, "experiment_names", []))
 
     def _own_has(rep: str, name: str) -> bool:
-        cfg = os.path.join(project.experiment_dir(rep),
-                           "tracking_config.yaml")
+        cfg = layout.config_path(project.experiment_dir(rep))
         try:
             own = load_scripts(cfg)
         except Exception:  # noqa: BLE001

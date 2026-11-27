@@ -69,7 +69,87 @@ def is_project_dir(path) -> bool:
 
 
 def is_experiment_dir(path) -> bool:
-    return os.path.isfile(os.path.join(str(path), CONFIG_FILENAME))
+    """A replicate: its own ``tracking_config.yaml``, or a
+    ``tracking_member.yaml`` naming its recording's config (ADR-0020)."""
+    from . import layout
+    return layout.has_config(path)
+
+
+#: The ``global:`` keys that describe a recording rather than how it is
+#: analysed (ADR-0020): what was recorded and how. A replicate reading its
+#: recording's config takes these from that config, and they must agree with
+#: the Project's design as any replicate's must. Every other ``global:`` key
+#: is an analysis setting, which inside a Project with a design is the
+#: design's alone, so two Projects may analyse one recording differently.
+#: ``tracking_regions``, ``counting_regions`` and ``about:`` are outside
+#: ``global:`` and always the recording's.
+DESCRIPTION_KEYS = ("experiment_type", "tracking_type", "tracking_rig", "fps",
+                    "mm_per_pixel", "experimental_design_factors")
+_ABSENT = object()
+
+
+def settings_from_design(config: dict, design_global: dict) -> tuple[dict, list[str]]:
+    """*config*, a recording's own, as a replicate reading it analyses it
+    inside a Project whose design is *design_global* (ADR-0020): its
+    description of the recording kept, every analysis setting the design's
+    (or the Experiment Type's default where the design states none). Returns
+    the config and the settings the recording's config states that are not
+    used, by name."""
+    stated = config.get("global")
+    stated = dict(stated) if isinstance(stated, dict) else {}
+    used = {key: value for key, value in stated.items() if key in DESCRIPTION_KEYS}
+    used.update({key: value for key, value in (design_global or {}).items()
+                 if key not in DESCRIPTION_KEYS})
+    ignored = sorted(key for key, value in stated.items()
+                     if key not in DESCRIPTION_KEYS
+                     and used.get(key, _ABSENT) != value)
+    resolved = dict(config)
+    resolved["global"] = used
+    return resolved, ignored
+
+
+def _design_global_of(project_dir) -> dict:
+    """``design.global`` of the Project at *project_dir*, or ``{}``."""
+    if not is_project_dir(project_dir):
+        return {}
+    try:
+        with open(os.path.join(str(project_dir), PROJECT_FILENAME),
+                  encoding="utf-8") as handle:
+            meta = yaml.safe_load(handle) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    design = meta.get("design") if isinstance(meta, dict) else None
+    found = design.get("global") if isinstance(design, dict) else None
+    return dict(found) if isinstance(found, dict) else {}
+
+
+def apply_design_settings(directory, config: dict, config_path=None,
+                          design_global=None) -> tuple[dict, list[str]]:
+    """The config the replicate in *directory* is analysed with, given
+    *config* as read from *config_path*, and the settings that config states
+    that are not used (ADR-0020).
+
+    Only a replicate reading its recording's config through
+    ``tracking_member.yaml``, inside a Project with a design, is changed: the
+    design's settings replace the config's. A replicate holding its own
+    config, one opened on another config file, and any replicate of a
+    Project without a design read the config whole, exactly as before.
+    *design_global* is the Project's ``design.global`` when the caller has
+    it; otherwise it is read from the folder above *directory*.
+    """
+    from . import layout
+    named = layout.config_location(directory)
+    if not named.referenced or named.problem:
+        return config, []
+    if config_path is not None and os.path.normcase(os.path.realpath(
+            str(config_path))) != os.path.normcase(os.path.realpath(named.path)):
+        return config, []
+    if design_global is None:
+        design_global = _design_global_of(
+            os.path.dirname(os.path.abspath(str(directory))))
+    if not design_global:
+        return config, []
+    return settings_from_design(config, design_global)
 
 
 def has_experiment_data(path) -> bool:
@@ -187,8 +267,11 @@ def create_project_file(project_dir, name: str | None = None,
 
 
 def replicate_config_paths(project_dir) -> list[str]:
-    """Every immediate subdirectory's ``tracking_config.yaml`` — the
-    replicates, found without loading (and so validating) the Project."""
+    """Every immediate subdirectory's own ``tracking_config.yaml`` — the
+    replicates, found without loading (and so validating) the Project. A
+    replicate reading its recording's config (ADR-0020) is not listed: what
+    is written here is the design's, and nothing writes it into a recording's
+    own config."""
     out = []
     for entry in sorted(os.listdir(str(project_dir))):
         path = os.path.join(str(project_dir), entry, CONFIG_FILENAME)
@@ -321,6 +404,13 @@ class Project:
         #: one recording — the rule layout.experiments_in applies, so the
         #: Project and Batch discovery agree on who is a duplicate.
         reads = layout.DataLocations()
+        #: Replicates reading their recording's config whose config cannot
+        #: be read (ADR-0020): ``{name: why}``, said as warnings, never loaded.
+        self.unreadable: dict[str, str] = {}
+        #: Settings a recording's own config states that the design replaces
+        #: (ADR-0020): ``{name: [key, ...]}``, said as warnings.
+        self.unused_settings: dict[str, list[str]] = {}
+        design_global = dict(self.design.get("global") or {})
         for entry in sorted(os.listdir(self.project_directory)):
             sub = os.path.join(self.project_directory, entry)
             if os.path.isdir(sub) and is_experiment_dir(sub):
@@ -328,10 +418,17 @@ class Project:
                 if real in seen:
                     continue
                 seen.add(real)
-                with open(os.path.join(sub, CONFIG_FILENAME),
-                          encoding="utf-8") as handle:
+                named = layout.config_location(sub)
+                if named.problem:
+                    self.unreadable[entry] = named.problem
+                    continue
+                with open(named.path, encoding="utf-8") as handle:
                     config = yaml.safe_load(handle) or {}
                 location = layout.data_location(sub, config=config)
+                config, ignored = apply_design_settings(
+                    sub, config, design_global=design_global)
+                if ignored:
+                    self.unused_settings[entry] = ignored
                 first = reads.claim(entry, location)
                 if first is not None:
                     self.duplicates[entry] = first
@@ -368,6 +465,13 @@ class Project:
         for name, location in self.data_locations.items():
             if location.problem:
                 self.warnings.append(f"{name}: {location.problem}")
+        for name, problem in self.unreadable.items():
+            self.warnings.append(f"{name} is not loaded: {problem}")
+        for name, keys in self.unused_settings.items():
+            self.warnings.append(
+                f"{name} reads its recording's config, which states "
+                f"{', '.join(keys)}; the Project's design sets the analysis "
+                "settings, so those are not used (ADR-0020)")
         self._validate_design_match()
         #: Where replicates describe one factor level, or one factor's kind,
         #: differently in ``about:`` — worth knowing, because the Combined

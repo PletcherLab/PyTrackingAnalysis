@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .. import layout
 from ..help import make_topbar_help_button
 from ..ui import ActionButton, Category, TopBar, apply_theme, icon, resolved_mode
 from .actions import ACTIONS, validation_issues
@@ -314,7 +315,7 @@ class ScriptEditorWindow(QMainWindow):
             try:
                 choices["only"] = sorted(
                     d.name for d in root.iterdir()
-                    if d.is_dir() and (d / "tracking_config.yaml").is_file())
+                    if d.is_dir() and layout.has_config(d))
             except OSError:
                 pass
         self._inspector.set_choices(choices)

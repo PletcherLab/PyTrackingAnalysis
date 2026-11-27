@@ -102,8 +102,9 @@ from .common import TaskWorker, capture_figures, shutdown_worker
 # tabs in the Hub.
 _SAVED_RE = re.compile(r"^\s*Saved:\s+(\S.*?)\s*$")
 
-# The only config file ``Experiment.__init__`` ever opens — it takes a project
-# directory and joins this name onto it, with no parameter to override it.
+# The config file a replicate holds of its own. A replicate may instead hold
+# tracking_member.yaml naming its recording's config (ADR-0020); ask
+# layout.config_path which one a replicate reads.
 _CANONICAL_CONFIG = "tracking_config.yaml"
 ## The replicates table is sized to its rows (``_fit_exp_table_height``):
 ## enough for one row when the Project is empty, and never so tall that the
@@ -3124,8 +3125,12 @@ class HubWindow(QMainWindow):
             return False
         project_dir = target
         # Experiments always use the canonical tracking_config.yaml (the
-        # Project card no longer offers alternate YAML pickers).
-        config_name = _CANONICAL_CONFIG
+        # Project card no longer offers alternate YAML pickers), or the
+        # recording's own config a tracking_member.yaml names (ADR-0020).
+        from .. import layout as layout_mod
+
+        named = layout_mod.config_location(project_dir)
+        config_name = named.path if named.referenced else _CANONICAL_CONFIG
         # Use a list as a mutable holder so the worker callable can hand the
         # built Experiment back to the GUI thread without a custom signal.
         result_holder: list = []
@@ -4214,9 +4219,13 @@ class ProjectInfoDialog(QDialog):
         from .. import experiment_types as _et
 
         try:
+            from .. import layout as layout_mod
+
             for entry in sorted(os.listdir(directory)):
-                cfg_path = os.path.join(directory, entry,
-                                        "tracking_config.yaml")
+                ## A replicate's own config, or the recording's config its
+                ## tracking_member.yaml names (ADR-0020): a first design is
+                ## inferred from the whole of it.
+                cfg_path = layout_mod.config_path(os.path.join(directory, entry))
                 if not os.path.isfile(cfg_path):
                     continue
                 with open(cfg_path, encoding="utf-8") as handle:

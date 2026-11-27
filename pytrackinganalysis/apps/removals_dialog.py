@@ -73,7 +73,10 @@ def project_regions(project_dir) -> list:
 
 
 def _read_config(experiment_dir) -> dict:
-    path = os.path.join(str(experiment_dir), prj.CONFIG_FILENAME)
+    from .. import layout
+
+    ## The replicate's own config, or its recording's (ADR-0020).
+    path = layout.config_path(experiment_dir)
     try:
         with open(path, encoding="utf-8") as handle:
             return yaml.safe_load(handle) or {}

@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import (
 
 from .. import about as about_mod
 from .. import config_validation
+from .. import layout
 from .. import experiment_types as _et
 from .. import project as project_mod
 from ..io_utils import atomic_write_text
@@ -94,7 +95,17 @@ class ConfigEditorWindow(QMainWindow):
         if initial_path:
             candidate = Path(initial_path).expanduser().resolve()
             if candidate.is_dir():
-                candidate = candidate / "tracking_config.yaml"
+                ## A replicate holding tracking_member.yaml reads its
+                ## recording's own config, which is the one to open and save
+                ## (ADR-0020): no copy is made.
+                named = layout.config_location(candidate)
+                if named.problem:
+                    ## Never adopt a path the pointer cannot reach: saving
+                    ## would create a config where none should be.
+                    QMessageBox.warning(self, "Cannot open the config",
+                                        named.problem)
+                    return
+                candidate = Path(named.path)
             if candidate.exists():
                 self._load_path(candidate)
                 return

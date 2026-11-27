@@ -29,9 +29,19 @@ several ``data/*.xlsx`` with only a log line, so a one-click fix that can
 silently change which recording an analysis is of is worse than a directory
 that stays blocked.
 
+**Which config a replicate reads** is answered once, by
+:func:`config_location` (ADR-0020): its own ``tracking_config.yaml``, as
+always, or the recording's own config that its ``tracking_member.yaml``
+names, so a recording kept elsewhere (by the lab's catalogue) has one config
+however many Projects analyse it. A replicate holding its own config is
+exactly what it was before; a Project may mix the two kinds. A named config
+is only ever read from the replicate: nothing written for the replicate goes
+beside it.
+
 **Where the recording is** is answered once, by :func:`data_location`
 (ADR-0018): the replicate's own ``data/``, or the folder its
-``data_folder:`` key names. The loader, this classifier, the Project, Batch
+``data_folder:`` key names, or, for a replicate reading its recording's
+config, the ``data/`` beside that config (or where ``data_folder:`` says). The loader, this classifier, the Project, Batch
 discovery, the Hub and clock repair all ask it, so none of them can read a
 different folder from the others. A referenced recording is only ever read:
 it is never filed, moved, repaired in place, or written beside.
@@ -59,6 +69,14 @@ EXTRA_DIRNAME = "extra_files"
 #: belongs to that one config: never under ``global:``, never in a Project
 #: design, never inherited by a scaffolded replicate.
 DATA_FOLDER_KEY = "data_folder"
+
+#: What a replicate holds instead of a config of its own, to read its
+#: recording's config where the recording keeps it (ADR-0020), and the key
+#: naming it. A relative ``config:`` is resolved against the replicate
+#: folder; so is the file's optional ``data_folder:``. Everything written for
+#: the replicate still goes in the replicate folder.
+MEMBER_FILENAME = "tracking_member.yaml"
+CONFIG_KEY = "config"
 
 #: The recording itself: ``<name>.xlsx`` plus its ``<name>_Data_*.csv``
 #: companions — exactly what ``Arena`` loads out of ``data/``.
@@ -190,19 +208,23 @@ class DataLocation:
     *path* is the folder the loader reads. *written* is the ``data_folder:``
     value exactly as the config spells it, or None when the replicate reads
     its own ``data/`` — in which case *path* is :func:`data_dir`'s answer and
-    nothing else about the replicate has changed. *problem* says why the
-    loader cannot read a referenced location; it is empty when it can.
+    nothing else about the replicate has changed. *via* is the ``config:`` of
+    a replicate reading its recording's config (ADR-0020), whose data is
+    beside that config, or where a ``data_folder:`` says. *problem* says why
+    the loader cannot read a referenced location; it is empty when it can.
     """
 
     path: str
     written: str | None = None
     problem: str = ""
     kind: str = ""
+    via: str | None = None
 
     @property
     def referenced(self) -> bool:
-        """The replicate names its data location in its config."""
-        return self.written is not None
+        """The replicate reads a recording outside its own folder: its config
+        names the data location, or it reads its recording's config."""
+        return self.written is not None or self.via is not None
 
     @property
     def identity(self) -> str:
@@ -210,12 +232,22 @@ class DataLocation:
         ``normcase`` because the lab's share is case-insensitive."""
         return os.path.normcase(os.path.realpath(self.path))
 
+    def describe(self) -> str:
+        """The location said both ways: the path, then the key that names it."""
+        if self.via is None:
+            return f"{DATA_FOLDER_KEY}: {self.written} ({self.path})"
+        if self.written is None:
+            return f"{self.path} (beside {MEMBER_FILENAME}'s {CONFIG_KEY}: {self.via})"
+        return (f"{DATA_FOLDER_KEY}: {self.written} ({self.path}) for "
+                f"{MEMBER_FILENAME}'s {CONFIG_KEY}: {self.via}")
+
 
 def configured_data_folder(directory, config=None, config_path=None):
     """The ``data_folder:`` value for *directory*, as written, or None.
 
     *config* is a config already parsed; otherwise the file at *config_path*
-    (default ``<directory>/tracking_config.yaml``) is read. A config that never
+    (default: the config the replicate reads, :func:`config_location`) is
+    read. A config that never
     mentions the key is not parsed at all, so a replicate without one costs a
     file read and nothing it did before can change. A config that cannot be
     read or parsed counts as having no key: the loader reports a broken config
@@ -223,7 +255,7 @@ def configured_data_folder(directory, config=None, config_path=None):
     is no key.
     """
     if config is None:
-        path = config_path or os.path.join(str(directory), CONFIG_FILENAME)
+        path = config_path or config_location(directory).path
         try:
             with open(path, encoding="utf-8", errors="replace") as handle:
                 text = handle.read()
@@ -264,6 +296,114 @@ def _contains(folder, path) -> bool:
         return os.path.commonpath([folder, path]) == folder
     except ValueError:                      # different drives
         return False
+
+
+# ---------------------------------------------------------------------------
+# Which config a replicate reads (ADR-0020)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ConfigLocation:
+    """Which config one replicate reads.
+
+    *path* is the config file. *written* is the ``config:`` value of the
+    replicate's ``tracking_member.yaml`` as written, or None when the
+    replicate holds its own ``tracking_config.yaml`` — the usual case, and
+    nothing about it has changed. *data_written* is the member file's
+    ``data_folder:`` as written, when it names the data itself. *problem*
+    says why a named config cannot be read; it is empty when it can.
+    """
+
+    path: str
+    written: str | None = None
+    problem: str = ""
+    kind: str = ""
+    data_written: str | None = None
+
+    @property
+    def referenced(self) -> bool:
+        """The replicate reads its recording's config, not one of its own."""
+        return self.written is not None
+
+    @property
+    def folder(self) -> str:
+        """The folder holding the config: the recording's, whose ``data/`` is
+        the default data location."""
+        return os.path.dirname(self.path)
+
+    def describe(self) -> str:
+        """The config said both ways: the path, then the key as written."""
+        if not self.referenced:
+            return str(self.path)
+        return f"{self.path} ({MEMBER_FILENAME}: {CONFIG_KEY}: {self.written})"
+
+
+def config_location(directory) -> ConfigLocation:
+    """Which config the replicate in *directory* reads (ADR-0020).
+
+    Without ``tracking_member.yaml`` it is the replicate's own
+    ``tracking_config.yaml``, and nothing is read or checked: a Project laid
+    out the usual way is untouched. With one, its ``config:`` is resolved
+    against *directory* and checked, in this order: a value that is not a
+    path; the replicate holding a ``tracking_config.yaml`` of its own too
+    ("which is the experiment's config?"); the recording's folder holding the
+    replicate folder (everything written for the replicate goes there, and
+    nothing is ever written beside a recording's config); a config that does
+    not exist; and a folder where the file belongs. The file's
+    ``data_folder:``, when it has one, is kept for :func:`data_location`.
+    """
+    directory = str(directory)
+    own = os.path.join(directory, CONFIG_FILENAME)
+    member_file = os.path.join(directory, MEMBER_FILENAME)
+    if not os.path.isfile(member_file):
+        return ConfigLocation(own)
+
+    def refused(path, written, kind, problem):
+        return ConfigLocation(path, written, problem, kind)
+
+    try:
+        with open(member_file, encoding="utf-8") as handle:
+            pointer = yaml.safe_load(handle)
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as err:
+        return refused(member_file, "", _NOT_A_PATH,
+                       f"{member_file} cannot be read: {err}")
+    value = pointer.get(CONFIG_KEY) if isinstance(pointer, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        return refused(member_file, "" if value is None else repr(value),
+                       _NOT_A_PATH,
+                       f"{member_file} names no config: its {CONFIG_KEY}: is "
+                       f"{'missing' if value is None else repr(value)}")
+    data = pointer.get(DATA_FOLDER_KEY)
+    if data is None or (isinstance(data, str) and not data.strip()):
+        data = None
+    elif not isinstance(data, str):
+        data = repr(data)
+    path = resolve_data_folder(directory, value)
+    where = f"{MEMBER_FILENAME}: {CONFIG_KEY}: {value} resolves to {path}"
+    if os.path.isfile(own):
+        return refused(path, value, _CONFLICT,
+                       f"{where}, but {directory} also holds a "
+                       f"{CONFIG_FILENAME} of its own — which is the "
+                       "experiment's config? Keep one")
+    if _contains(os.path.dirname(path), directory):
+        return refused(path, value, _HOLDS_REPLICATE,
+                       f"{where}, whose folder holds the replicate folder "
+                       f"{os.path.realpath(directory)} itself — the analysis "
+                       "is written there, and nothing is ever written beside "
+                       "a recording's config")
+    if not os.path.exists(path):
+        return refused(path, value, _MISSING, f"{where}, which does not exist")
+    if not os.path.isfile(path):
+        return refused(path, value, _NOT_A_FOLDER,
+                       f"{where}, which is a folder, not a file")
+    return ConfigLocation(path, value, data_written=data)
+
+
+def config_path(directory) -> str:
+    """The config the replicate in *directory* reads: :func:`config_location`'s
+    path, whether or not it can be read."""
+    return config_location(directory).path
 
 
 def _recording_files(directory) -> list[str]:
@@ -322,9 +462,21 @@ def data_location(directory, *, config=None, config_path=None) -> DataLocation:
     and the resolved path.
 
     *config* (already parsed) or *config_path* (another config file) are for
-    a caller that has one; the default reads ``tracking_config.yaml``.
+    a caller that has one; the default reads the config the replicate reads.
+
+    A replicate reading its recording's config (ADR-0020) reads the data its
+    ``tracking_member.yaml``'s ``data_folder:`` names, resolved against the
+    replicate; else the folder that config's own ``data_folder:`` names,
+    resolved from the config's folder; else the ``data/`` beside the config.
+    The same checks apply, and a recording of the replicate's own is a
+    conflict.
     """
     directory = str(directory)
+    named = config_location(directory)
+    if named.referenced and (config_path is None or os.path.normcase(
+            os.path.realpath(config_path)) == os.path.normcase(
+            os.path.realpath(named.path))):
+        return _referenced_data(directory, named, config)
     value = configured_data_folder(directory, config, config_path)
     if value is None:
         return DataLocation(data_dir(directory))
@@ -359,12 +511,57 @@ def data_location(directory, *, config=None, config_path=None) -> DataLocation:
     return DataLocation(path, written)
 
 
+def _referenced_data(directory, named: ConfigLocation, config=None) -> DataLocation:
+    """:func:`data_location` for a replicate reading its recording's config."""
+    via = named.written
+    if named.problem:
+        return DataLocation(named.path, None, named.problem, named.kind, via)
+    if named.data_written is not None:
+        written, base = named.data_written, directory
+        where_key = f"{MEMBER_FILENAME}: {DATA_FOLDER_KEY}: {written}"
+    else:
+        written = configured_data_folder(named.folder, config, named.path)
+        base = named.folder
+        if written is not None and not isinstance(written, str):
+            written = repr(written)
+        where_key = (f"{DATA_FOLDER_KEY}: {written} in {named.path}"
+                     if written is not None else "")
+    if written is None:
+        path = data_dir(named.folder)
+        where = f"the {DATA_DIRNAME}/ beside {named.describe()}, {path},"
+    else:
+        path = resolve_data_folder(base, written)
+        where = f"{where_key} resolves to {path},"
+
+    def refused(kind, problem):
+        return DataLocation(path, written, problem, kind, via)
+
+    if _contains(path, directory):
+        return refused(
+            _HOLDS_REPLICATE,
+            f"{where} which holds the replicate folder "
+            f"{os.path.realpath(directory)} itself — the analysis is written "
+            "there, and nothing is ever written at a data location")
+    own = _own_recording(directory, path)
+    if own:
+        return refused(
+            _CONFLICT,
+            f"{directory} reads its recording through {MEMBER_FILENAME} but "
+            f"also holds a recording of its own ({own}) — which is the "
+            "experiment? Move the local recording out")
+    if not os.path.exists(path):
+        return refused(_MISSING, f"{where} which does not exist")
+    if not os.path.isdir(path):
+        return refused(_NOT_A_FOLDER, f"{where} which is a file, not a folder")
+    return DataLocation(path, written, via=via)
+
+
 def require_data_location(directory, *, config_path=None) -> DataLocation:
     """:func:`data_location`, raising :class:`DataLocationError` for a
     referenced location the loader cannot read. The loader's entry point."""
     location = data_location(directory, config_path=config_path)
     if location.problem:
-        source = config_path or os.path.join(str(directory), CONFIG_FILENAME)
+        source = config_path or config_location(directory).describe()
         raise DataLocationError(f"{location.problem} (set in {source})")
     return location
 
@@ -409,13 +606,16 @@ def workbooks(directory) -> list[str]:
 
 
 def has_config(directory) -> bool:
-    """``tracking_config.yaml`` at the root — the Experiment membership test.
+    """``tracking_config.yaml``, or a ``tracking_member.yaml`` naming the
+    recording's config (ADR-0020), at the root — the Experiment membership
+    test.
 
     Deliberately the same exact-case test as :func:`project.is_experiment_dir`:
     a directory this says has no config is one the Project genuinely cannot
     see, which is what makes "scaffold a config" the right offer.
     """
-    return os.path.isfile(os.path.join(str(directory), CONFIG_FILENAME))
+    return (os.path.isfile(os.path.join(str(directory), CONFIG_FILENAME))
+            or os.path.isfile(os.path.join(str(directory), MEMBER_FILENAME)))
 
 
 def _loose_recording_files(directory) -> tuple[str, ...]:
@@ -545,7 +745,7 @@ def _classify_referenced(directory, name, location: DataLocation) -> ExperimentL
                   else NO_RECORDING)
         return blocked(status, location.problem)
 
-    where = f"{DATA_FOLDER_KEY}: {location.written} ({location.path})"
+    where = location.describe()
     filed = _loadable_workbooks(location.path)
     if len(filed) > 1:
         return blocked(AMBIGUOUS,
@@ -747,9 +947,16 @@ def plan_filing(directory) -> FilingPlan:
         ## Its recording lives where data_folder: says, and is only ever read
         ## (ADR-0018). Whatever is loose here is a conflict to settle by hand,
         ## not a recording to move.
-        plan.refused = (f"its {CONFIG_FILENAME} reads the recording from "
-                        f"{DATA_FOLDER_KEY}: {location.written} — a replicate "
-                        "that names its data folder is never filed")
+        if location.via is None:
+            plan.refused = (f"its {CONFIG_FILENAME} reads the recording from "
+                            f"{DATA_FOLDER_KEY}: {location.written} — a "
+                            "replicate that names its data folder is never "
+                            "filed")
+        else:
+            plan.refused = (f"it reads its recording through "
+                            f"{MEMBER_FILENAME} ({location.describe()}) — a "
+                            "replicate that names its recording is never "
+                            "filed")
         return plan
     item = classify(directory)
     if item.status != UNFILED:

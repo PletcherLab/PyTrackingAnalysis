@@ -245,7 +245,9 @@ class Experiment:
         """
         self.project_directory = os.path.abspath(project_directory)
         if config_path is None:
-            self.config_path = os.path.join(self.project_directory, 'tracking_config.yaml')
+            ## The replicate's own tracking_config.yaml, or the recording's
+            ## config its tracking_member.yaml names (ADR-0020).
+            self.config_path = layout.config_path(self.project_directory)
         else:
             self.config_path = config_path if os.path.isabs(config_path) \
                 else os.path.join(self.project_directory, config_path)
@@ -264,6 +266,18 @@ class Experiment:
         os.makedirs(self.qc_path, exist_ok=True)
 
         self.config = self._load_config()
+        ## A replicate reading its recording's config inside a Project with a
+        ## design is analysed with the design's settings (ADR-0020); any other
+        ## replicate reads its config whole, exactly as before.
+        from . import project as _project
+        self.config, self.unused_settings = _project.apply_design_settings(
+            self.project_directory, self.config, self.config_path)
+        if self.unused_settings:
+            note = (f"{self.config_path} states "
+                    f"{', '.join(self.unused_settings)}; the Project's design "
+                    "sets the analysis settings, so those are not used")
+            logger.warning(note)
+            print(f"Note: {note}")
         ## The Experiment Type (absent -> Custom) owns the fixed fields and its
         ## own constraints. Resolve it before anything reads tracking_type or
         ## facets, so those come from the type for a typed experiment (ADR-0001).
@@ -2476,7 +2490,8 @@ def _is_experiment_dir(path: str) -> bool:
     """
     entries = {e.lower(): e for e in os.listdir(path)}
 
-    if 'tracking_config.yaml' not in entries:
+    if 'tracking_config.yaml' not in entries \
+            and layout.MEMBER_FILENAME not in entries:
         return False
 
     if layout.data_location(path).referenced:

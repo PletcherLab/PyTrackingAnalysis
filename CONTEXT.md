@@ -149,6 +149,17 @@ hard-validated against the Project's `design:` section (experiment type,
 factors and levels, facets, quality criteria, counting-region names in
 order); region→treatment assignments, counting-region aliases, fly counts,
 and rigs may differ. New replicates are scaffolded from the design.
+A replicate may instead hold a **Member File**.
+
+**Member File**:
+`tracking_member.yaml` in a replicate folder, in place of a config: its
+`config:` names the recording's own `tracking_config.yaml` where the lab's
+catalogue keeps it, and its optional `data_folder:` the data (ADR-0020). The
+recording then has one config however many Projects analyse it, and edits
+made in the Config Editor go to that config. Inside a Project with a design,
+the recording's config gives the description (type, tracking type, rig,
+factors, regions) and the design gives every analysis setting.
+_Avoid_: link file, shortcut, copy
 
 **Combined Analysis**:
 The Project-level results built by stacking each replicate's *filtered*

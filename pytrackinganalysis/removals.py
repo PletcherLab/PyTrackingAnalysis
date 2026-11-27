@@ -527,7 +527,10 @@ def _config_regions(experiment_dir) -> set:
     analysis warns about an unmatched declaration instead)."""
     from . import project as prj
 
-    path = os.path.join(str(experiment_dir), prj.CONFIG_FILENAME)
+    from . import layout
+
+    ## The replicate's own config, or its recording's (ADR-0020).
+    path = layout.config_path(experiment_dir)
     try:
         with open(path, encoding="utf-8") as handle:
             config = yaml.safe_load(handle) or {}
